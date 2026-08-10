@@ -8,7 +8,7 @@ version = "0.2.0"
 description = "Python orchestrator for worktrees-hives: issue-to-PR and PR-babysit with isolated subagents"
 readme = "../README.md"
 license = "Apache-2.0"
-requires-python = ">=3.10"
+requires-python = ">=3.14.7"
 authors = [
     { name = "rmems", email = "noreply@example.com" },
 ]
@@ -17,10 +17,6 @@ classifiers = [
     "Intended Audience :: Developers",
     "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12",
-    "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
     "Typing :: Typed",
 ]
@@ -60,7 +56,7 @@ asyncio_mode = "auto"
 [tool.ruff]
 src = ["src"]
 line-length = 100
-target-version = "py310"
+target-version = "py314"
 
 [tool.ruff.lint]
 select = [
@@ -79,7 +75,7 @@ ignore = [
 ]
 
 [tool.mypy]
-python_version = "3.10"
+python_version = "3.14"
 strict = true
 warn_return_any = true
 warn_unused_configs = true

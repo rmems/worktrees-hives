@@ -9,7 +9,7 @@ import sys
 import tempfile
 import time
 from dataclasses import asdict, dataclass, field, fields
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -39,7 +39,7 @@ def load_allowed_owners_from_env() -> frozenset[str]:
     return frozenset(part.strip() for part in raw.split(",") if part.strip())
 
 
-class JobStatus(str, Enum):
+class JobStatus(StrEnum):
     """Status of a watched job."""
 
     PENDING = "pending"

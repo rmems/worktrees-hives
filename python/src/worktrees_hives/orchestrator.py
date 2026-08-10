@@ -196,7 +196,7 @@ class Orchestrator:
                     result=result,
                     elapsed_seconds=time.monotonic() - start,
                 )
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 _notify(WorkerStatus.TIMED_OUT)
                 return WorkerResult(
                     worker_id=spec.worker_id,
@@ -238,7 +238,7 @@ class Orchestrator:
         """Run a worker coroutine, converting TimeoutError to a typed exception."""
         try:
             return await coro
-        except asyncio.TimeoutError as exc:
+        except TimeoutError as exc:
             raise WorkerTimeoutError(exc) from exc
 
     @staticmethod

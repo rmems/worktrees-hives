@@ -21,7 +21,7 @@ import os
 import re
 import subprocess
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
 from worktrees_hives.bridge import WhClient
@@ -88,7 +88,7 @@ class IssueToPrConfig:
 # ---------------------------------------------------------------------------
 
 
-class Step(str, Enum):
+class Step(StrEnum):
     """Lifecycle steps for the issue-to-PR workflow."""
 
     INIT = "init"

@@ -16,9 +16,10 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Install stable Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust 1.97.1
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
         with:
+          toolchain: "1.97.1"
           components: clippy, rustfmt
 
       - name: Cache Cargo artifacts
@@ -44,8 +45,10 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install stable Rust
+      - name: Install Rust 1.97.1
         uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        with:
+          toolchain: "1.97.1"
 
       - name: Cache Cargo artifacts
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1

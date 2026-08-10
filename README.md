@@ -71,7 +71,7 @@ Prerequisites:
 - Git
 - GitHub CLI for future GitHub operations
 
-The workspace MSRV is Rust **1.85**. `rust-toolchain.toml` selects the latest stable toolchain for development and CI.
+The workspace MSRV is Rust **1.97.1** (`rust-toolchain.toml` pins that channel). The Python package requires **Python ≥ 3.14.7** (CI uses 3.14.7).
 
 ```bash
 cargo build --workspace

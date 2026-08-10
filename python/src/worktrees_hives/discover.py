@@ -11,7 +11,7 @@ import json
 import logging
 import os
 from dataclasses import dataclass, replace
-from enum import Enum
+from enum import StrEnum
 from typing import Any, Literal
 
 from worktrees_hives.bridge import WhClient
@@ -48,7 +48,7 @@ def _wh_client() -> WhClient:
     return _default_wh_client
 
 
-class IssueState(str, Enum):
+class IssueState(StrEnum):
     """State of a GitHub issue or PR.
 
     GitHub's issue/PR list APIs only support open, closed, and all.
