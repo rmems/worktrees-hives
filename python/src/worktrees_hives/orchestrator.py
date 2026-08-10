@@ -83,9 +83,9 @@ class WorkerSpec:
 
 
 class WorkerTimeoutError(Exception):
-    """Raised when a worker coroutine raises :exc:`asyncio.TimeoutError`."""
+    """Raised when a worker coroutine raises :exc:`TimeoutError`."""
 
-    def __init__(self, original: asyncio.TimeoutError) -> None:
+    def __init__(self, original: TimeoutError) -> None:
         super().__init__(str(original))
         self.original = original
 
