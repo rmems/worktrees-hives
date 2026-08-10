@@ -303,10 +303,10 @@ impl SafeGitCommand {
     /// When `expected_branch` is `Some` and this command is mutating, verifies the
     /// current branch before running.
     pub fn run(&self, repo_dir: &Path, expected_branch: Option<&str>) -> Result<GitOutput> {
-        if self.requires_branch_check() {
-            if let Some(expected) = expected_branch {
-                self.verify_branch(repo_dir, expected)?;
-            }
+        if self.requires_branch_check()
+            && let Some(expected) = expected_branch
+        {
+            self.verify_branch(repo_dir, expected)?;
         }
 
         let output = Command::new("git")
@@ -364,27 +364,26 @@ impl SafeGhCommand {
 
         // Block `gh pr merge` / `ready` / `update-branch` even when inherited flags
         // precede the subcommand, e.g. `gh pr -R owner/repo merge 1`.
-        if subcommand == "pr" {
-            if let Some(pr_sub) = first_positional_after(&args[1..]) {
-                let blocked: HashSet<&str> = BLOCKED_GH_PR_SUBSUBCOMMANDS.iter().copied().collect();
-                if blocked.contains(pr_sub) {
-                    return Err(Error::PolicyViolation {
-                        code: PolicyCode::MergeBlocked,
-                        message: format!("`gh pr {pr_sub}` is not allowed"),
-                    });
-                }
+        if subcommand == "pr"
+            && let Some(pr_sub) = first_positional_after(&args[1..])
+        {
+            let blocked: HashSet<&str> = BLOCKED_GH_PR_SUBSUBCOMMANDS.iter().copied().collect();
+            if blocked.contains(pr_sub) {
+                return Err(Error::PolicyViolation {
+                    code: PolicyCode::MergeBlocked,
+                    message: format!("`gh pr {pr_sub}` is not allowed"),
+                });
             }
         }
 
         // `gh repo clone <repo> [<dir>]` can write outside the worktree.
-        if subcommand == "repo" {
-            if let Some(repo_sub) = first_positional_after(&args[1..]) {
-                if repo_sub == "clone" {
-                    // Find destination after `clone` token (skip option values).
-                    if let Some(dest) = gh_repo_clone_destination(&args[1..]) {
-                        reject_external_path(Some(dest), "gh repo clone destination")?;
-                    }
-                }
+        if subcommand == "repo"
+            && let Some(repo_sub) = first_positional_after(&args[1..])
+            && repo_sub == "clone"
+        {
+            // Find destination after `clone` token (skip option values).
+            if let Some(dest) = gh_repo_clone_destination(&args[1..]) {
+                reject_external_path(Some(dest), "gh repo clone destination")?;
             }
         }
 
@@ -543,15 +542,15 @@ fn reject_external_write_targets(subcommand: &str, args: &[String]) -> Result<()
                         .to_owned(),
                 });
             }
-            if let Some(key) = config_key_name(args) {
-                if is_command_launching_config_key(key) {
-                    return Err(Error::PolicyViolation {
-                        code: PolicyCode::SubcommandNotAllowed,
-                        message: format!(
-                            "git config key `{key}` can launch external commands and is not allowed"
-                        ),
-                    });
-                }
+            if let Some(key) = config_key_name(args)
+                && is_command_launching_config_key(key)
+            {
+                return Err(Error::PolicyViolation {
+                    code: PolicyCode::SubcommandNotAllowed,
+                    message: format!(
+                        "git config key `{key}` can launch external commands and is not allowed"
+                    ),
+                });
             }
             let mut i = 0;
             while i < args.len() {
@@ -564,10 +563,11 @@ fn reject_external_write_targets(subcommand: &str, args: &[String]) -> Result<()
                     continue;
                 }
                 // Attached short form: `-f/tmp/cfg` or `-f./rel`.
-                if let Some(path) = a.strip_prefix("-f") {
-                    if !path.is_empty() && !path.starts_with('-') {
-                        reject_external_path(Some(path), "git config file")?;
-                    }
+                if let Some(path) = a.strip_prefix("-f")
+                    && !path.is_empty()
+                    && !path.starts_with('-')
+                {
+                    reject_external_path(Some(path), "git config file")?;
                 }
                 if let Some(path) = a.strip_prefix("--file=") {
                     reject_external_path(Some(path), "git config file")?;
@@ -908,11 +908,12 @@ fn config_key_name(args: &[String]) -> Option<&str> {
                 i += 1;
                 continue;
             }
-            if let Some(rest) = a.strip_prefix("-f") {
-                if !rest.is_empty() && !rest.starts_with('-') {
-                    i += 1;
-                    continue;
-                }
+            if let Some(rest) = a.strip_prefix("-f")
+                && !rest.is_empty()
+                && !rest.starts_with('-')
+            {
+                i += 1;
+                continue;
             }
             if a.starts_with("--file=") || a.starts_with("--type=") || a.starts_with("--default=") {
                 i += 1;
@@ -1011,17 +1012,17 @@ pub fn normalize_github_repo_identity(spec: &str) -> Option<(String, String)> {
     }
     let mut host = String::from("github.com");
     // scp-like: git@host:owner/repo
-    if let Some(at) = s.find('@') {
-        if let Some(rel) = s[at..].find(':') {
-            let colon = at + rel;
-            let host_part = &s[at + 1..colon];
-            let after = &s[colon + 1..];
-            if after.contains('/') && !after.contains("://") {
-                if !host_part.is_empty() {
-                    host = host_part.to_ascii_lowercase();
-                }
-                s = after.to_owned();
+    if let Some(at) = s.find('@')
+        && let Some(rel) = s[at..].find(':')
+    {
+        let colon = at + rel;
+        let host_part = &s[at + 1..colon];
+        let after = &s[colon + 1..];
+        if after.contains('/') && !after.contains("://") {
+            if !host_part.is_empty() {
+                host = host_part.to_ascii_lowercase();
             }
+            s = after.to_owned();
         }
     }
     for prefix in ["https://", "http://", "ssh://", "git://"] {
@@ -1031,10 +1032,10 @@ pub fn normalize_github_repo_identity(spec: &str) -> Option<(String, String)> {
         }
     }
     // Drop userinfo in URL path form user@host/owner/repo
-    if let Some(at) = s.find('@') {
-        if !s[..at].contains('/') {
-            s = s[at + 1..].to_owned();
-        }
+    if let Some(at) = s.find('@')
+        && !s[..at].contains('/')
+    {
+        s = s[at + 1..].to_owned();
     }
     let parts: Vec<&str> = s.split('/').filter(|p| !p.is_empty()).collect();
     let (owner, repo) = match parts.as_slice() {

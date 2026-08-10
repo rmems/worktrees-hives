@@ -491,15 +491,15 @@ fn prepare_supervised_command(
             if let (Some(exp), Some(target)) = (
                 expected.as_deref(),
                 crate::git_safe::checkout_or_switch_target(&owned_args),
-            ) {
-                if target != exp && target != "HEAD" {
-                    return Err(Error::PolicyViolation {
-                        code: PolicyCode::BranchMismatch,
-                        message: format!(
-                            "git checkout/switch target `{target}` must equal --expected-branch `{exp}`"
-                        ),
-                    });
-                }
+            ) && target != exp
+                && target != "HEAD"
+            {
+                return Err(Error::PolicyViolation {
+                    code: PolicyCode::BranchMismatch,
+                    message: format!(
+                        "git checkout/switch target `{target}` must equal --expected-branch `{exp}`"
+                    ),
+                });
             }
             if let Some(exp) = expected.as_deref() {
                 crate::git_safe::reject_push_outside_expected_branch(&owned_args, exp)?;

@@ -296,3 +296,4 @@ qodana/
 .chroma_recall_tmp.py
 .mcp.json
 
+.ai/
