@@ -6,7 +6,8 @@ build-backend = "hatchling.build"
 name = "worktrees-hives"
 version = "0.2.0"
 description = "Python orchestrator for worktrees-hives: issue-to-PR and PR-babysit with isolated subagents"
-readme = "../README.md"
+# Must live inside the package dir (hatchling rejects paths outside the project).
+readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.14.7"
 authors = [
