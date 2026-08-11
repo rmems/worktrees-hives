@@ -78,10 +78,14 @@ jobs:
         working-directory: python
         run: mypy --config-file pyproject.toml src
 
+  # macOS/Windows minutes are expensive; full OS matrix only on main.
+  # PRs still run ubuntu + lint so Python gates are not skipped entirely.
   test:
     name: test (${{ matrix.os }}, Python ${{ matrix.python-version }})
     needs: [check-python-pkg, lint]
-    if: needs.check-python-pkg.outputs.exists == 'true'
+    if: >-
+      needs.check-python-pkg.outputs.exists == 'true' &&
+      (matrix.os == 'ubuntu-latest' || github.ref == 'refs/heads/main')
     strategy:
       fail-fast: false
       matrix:

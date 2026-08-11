@@ -31,9 +31,13 @@ jobs:
       - name: Run Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
+  # macOS/Windows are billable minutes; run them on main only.
+  # PRs keep ubuntu so quality gates still cover Linux before merge.
   cross-platform:
     name: test (${{ matrix.os }})
     needs: quality
+    # Skip non-ubuntu matrix rows on PRs / non-main refs.
+    if: ${{ matrix.os == 'ubuntu-latest' || github.ref == 'refs/heads/main' }}
     strategy:
       fail-fast: false
       matrix:
