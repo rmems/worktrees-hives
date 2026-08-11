@@ -67,7 +67,7 @@ def _resolve_wh_binary(explicit_path: str | None = None) -> str:
     if path_env is None:
         try:
             path_env = os.confstr("CS_PATH")
-        except AttributeError, ValueError:
+        except (AttributeError, ValueError):
             path_env = os.defpath
     if not path_env:
         raise WhBinaryNotFoundError()
@@ -200,7 +200,7 @@ class WhClient:
         if stripped:
             try:
                 classified = self._parse(stdout)
-            except WhJsonDecodeError, WhSchemaError:
+            except (WhJsonDecodeError, WhSchemaError):
                 pass
             else:
                 if isinstance(classified, ErrorResponse) and returncode == 2:

@@ -358,7 +358,7 @@ class Watchlist:
                 self._jobs[jid] = JobState(**d)
                 if extras:
                     self._job_extras[jid] = extras
-            except KeyError, ValueError, TypeError, PolicyError:
+            except (KeyError, ValueError, TypeError, PolicyError):
                 # Preserve unparseable records so they are not wiped on next save.
                 self._deferred_raw[jid] = raw
 

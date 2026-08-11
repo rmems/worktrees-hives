@@ -811,7 +811,7 @@ class BabysitCycle:
                                 primary = head[:8]
                                 self._fix_shas.add(head)
                                 break
-                except ValueError, subprocess.TimeoutExpired:
+                except (ValueError, subprocess.TimeoutExpired):
                     pass
                 reply_body = f"Addressed in {primary}: {self.attribution}"
                 try:
