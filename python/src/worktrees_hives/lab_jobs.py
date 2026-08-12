@@ -386,9 +386,7 @@ class LabJobStore:
             self._load()
             existing = self._jobs.get(job.job_id)
             if existing is None:
-                raise LabJobError(
-                    f"allocation aborted: job {job.job_id!r} reservation missing"
-                )
+                raise LabJobError(f"allocation aborted: job {job.job_id!r} reservation missing")
             if existing.status != LabJobStatus.PENDING:
                 raise LabJobError(
                     f"allocation aborted: job {job.job_id!r} is "
