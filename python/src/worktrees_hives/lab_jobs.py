@@ -374,6 +374,31 @@ class LabJobStore:
                 del self._jobs[job_id]
                 self._save()
 
+    def commit_allocated(self, job: LabJob) -> LabJob:
+        """PENDING → ALLOCATED under lock; fail if reservation was cancelled.
+
+        Prevents a late allocate ``put`` from resurrecting a job that concurrent
+        teardown already tombstoned (or otherwise left non-PENDING).
+        """
+        if job.status != LabJobStatus.ALLOCATED:
+            raise LabJobError("commit_allocated requires status=allocated")
+        with _exclusive_lock(self._path):
+            self._load()
+            existing = self._jobs.get(job.job_id)
+            if existing is None:
+                raise LabJobError(
+                    f"allocation aborted: job {job.job_id!r} reservation missing"
+                )
+            if existing.status != LabJobStatus.PENDING:
+                raise LabJobError(
+                    f"allocation aborted: job {job.job_id!r} is "
+                    f"{existing.status.value}, expected pending "
+                    "(concurrent teardown or cancel)"
+                )
+            self._jobs[job.job_id] = job
+            self._save()
+            return job
+
 
 class LabJobManager:
     """Allocate and tear down lab jobs via ``wh worktree``.
@@ -495,8 +520,8 @@ class LabJobManager:
                 status=LabJobStatus.ALLOCATED,
                 updated_at=_now_iso(),
             )
-            self.store.put(done)
-            return done
+            # Only promote if still PENDING — concurrent teardown must win.
+            return self.store.commit_allocated(done)
         except Exception:
             if path is not None:
                 with contextlib.suppress(LabJobError):

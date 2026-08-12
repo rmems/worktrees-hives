@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from dataclasses import replace
 from typing import TYPE_CHECKING
 from unittest.mock import MagicMock
 
@@ -241,6 +242,48 @@ class TestAllocate:
         assert j1.job_id != j2.job_id
         listed = mgr.list_jobs()
         assert {j.job_id for j in listed} == {"lab-A", "lab-B"}
+
+    def test_allocate_aborts_if_teardown_during_create(self, tmp_path: Path) -> None:
+        """Concurrent teardown must not be overwritten by a late allocate put."""
+        mgr, wh, store = _manager(tmp_path)
+        jid = "lab-race"
+        path = os.path.join(str(tmp_path / "wt"), TEST_OWNER, TEST_REPO, jid)
+
+        calls: list[tuple[str, ...]] = []
+
+        def _run(*args: str) -> SuccessResponse:
+            calls.append(args)
+            if args[0:2] == ("worktree", "create"):
+                existing = store.get(jid)
+                assert existing is not None
+                assert existing.status is LabJobStatus.PENDING
+                store.put(
+                    replace(
+                        existing,
+                        status=LabJobStatus.TORN_DOWN,
+                        updated_at="2026-08-12T01:00:00Z",
+                    )
+                )
+                return _ok_create(path=path, branch="lab/H-race")
+            return _ok_remove()
+
+        wh.run.side_effect = _run
+        with pytest.raises(LabJobError, match="allocation aborted"):
+            mgr.allocate(
+                owner=TEST_OWNER,
+                repo=TEST_REPO,
+                hypothesis_id="H-race",
+                agent_id="a",
+                role=AgentRole.AGENT,
+                job_id=jid,
+                branch="lab/H-race",
+            )
+        final = store.get(jid)
+        assert final is not None
+        assert final.status is LabJobStatus.TORN_DOWN
+        # Compensating remove after aborted commit.
+        assert len(calls) == 2
+        assert calls[1][0:2] == ("worktree", "remove")
 
 
 class TestTeardown:
