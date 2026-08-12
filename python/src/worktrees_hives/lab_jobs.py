@@ -394,24 +394,30 @@ class LabJobManager:
             raise LabJobExistsError(f"worktree already exists for this job: {worktree_path}")
 
         path, ret_branch = self._wh_create(owner, repo, jid, br)
-        if ret_branch != br:
-            raise LabJobError(f"wh returned branch {ret_branch!r}, expected {br!r}")
+        try:
+            if ret_branch != br:
+                raise LabJobError(f"wh returned branch {ret_branch!r}, expected {br!r}")
 
-        now = _now_iso()
-        job = LabJob(
-            job_id=jid,
-            hypothesis_id=hypothesis_id,
-            agent_id=str(agent_id).strip(),
-            role=role,
-            owner=owner,
-            repo=repo,
-            branch=ret_branch,
-            worktree_path=path,
-            status=LabJobStatus.ALLOCATED,
-            created_at=now,
-            updated_at=now,
-        )
-        self.store.put(job)
+            now = _now_iso()
+            job = LabJob(
+                job_id=jid,
+                hypothesis_id=hypothesis_id,
+                agent_id=str(agent_id).strip(),
+                role=role,
+                owner=owner,
+                repo=repo,
+                branch=ret_branch,
+                worktree_path=path,
+                status=LabJobStatus.ALLOCATED,
+                created_at=now,
+                updated_at=now,
+            )
+            self.store.put(job)
+        except Exception:
+            # Compensating remove: worktree exists on disk but no store row yet.
+            with contextlib.suppress(LabJobError):
+                self._wh_remove(path, force=True)
+            raise
         return job
 
     def list_jobs(self, *, status: LabJobStatus | None = None) -> list[LabJob]:
@@ -482,7 +488,14 @@ class LabJobManager:
         args: list[str] = ["worktree", "remove", path]
         if force:
             args.append("--force")
-        resp = self._wh_run(*args)
+        try:
+            resp = self._wh_run(*args)
+        except LabJobError:
+            # Idempotent: missing path still allows teardown tombstone.
+            # ``wh`` often exits non-zero without an error envelope → WhProcessError.
+            if not Path(path).exists():
+                return
+            raise
         if not isinstance(resp, SuccessResponse):
             # Idempotent-ish: if already gone, still allow tombstone if path missing.
             if not Path(path).exists():
