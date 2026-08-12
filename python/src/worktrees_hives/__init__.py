@@ -74,6 +74,17 @@ from worktrees_hives.issue_to_pr import (
     IssueToPrError,
     IssueToPrResult,
 )
+from worktrees_hives.lab_jobs import (
+    LAB_JOBS_SCHEMA_VERSION,
+    LabJob,
+    LabJobError,
+    LabJobExistsError,
+    LabJobManager,
+    LabJobNotFoundError,
+    LabJobStatus,
+    LabJobStore,
+    default_lab_jobs_path,
+)
 from worktrees_hives.orchestrator import (
     Orchestrator,
     OrchestratorReport,
@@ -98,6 +109,7 @@ from worktrees_hives.stacks import PRState as StackPRState
 __all__ = [
     "DEFAULT_ALLOWED_OWNERS",
     "FINDINGS_SCHEMA_VERSION",
+    "LAB_JOBS_SCHEMA_VERSION",
     "REQUIRED_MD_SECTIONS",
     "AgentRole",
     "AttributionConfig",
@@ -124,6 +136,13 @@ __all__ = [
     "IssueToPrConfig",
     "IssueToPrError",
     "IssueToPrResult",
+    "LabJob",
+    "LabJobError",
+    "LabJobExistsError",
+    "LabJobManager",
+    "LabJobNotFoundError",
+    "LabJobStatus",
+    "LabJobStore",
     "Orchestrator",
     "OrchestratorReport",
     "PRInfo",
@@ -155,6 +174,7 @@ __all__ = [
     "classify_check",
     "classify_checks",
     "classify_pr",
+    "default_lab_jobs_path",
     "empty_findings_markdown_template",
     "find_standalone_prs",
     "format_attribution",
