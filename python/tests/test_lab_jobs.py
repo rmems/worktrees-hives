@@ -196,6 +196,18 @@ class TestAllocate:
             )
         wh.run.assert_not_called()
 
+    def test_empty_allowlist_denies(self, tmp_path: Path) -> None:
+        mgr, wh, _ = _manager(tmp_path, allowed_owners=frozenset())
+        with pytest.raises(LabJobError, match=r"deny-by-default|empty"):
+            mgr.allocate(
+                owner=TEST_OWNER,
+                repo=TEST_REPO,
+                hypothesis_id="H-1",
+                agent_id="a",
+                role=AgentRole.AGENT,
+            )
+        wh.run.assert_not_called()
+
     def test_two_jobs_distinct_paths(self, tmp_path: Path) -> None:
         mgr, wh, _ = _manager(tmp_path)
         p1 = os.path.join(str(tmp_path / "wt"), TEST_OWNER, TEST_REPO, "lab-A")

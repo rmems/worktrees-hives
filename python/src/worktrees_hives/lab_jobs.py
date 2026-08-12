@@ -16,8 +16,12 @@ Override with env ``WH_LAB_JOBS_PATH`` (never ``WH_STATE_PATH`` or
 
     {"schema_version": 1, "jobs": { "<job_id>": { ... } }}
 
-Writes are atomic (temp file + rename). Teardown keeps a tombstone with
-status ``torn_down``.
+Writes are atomic (temp file + rename) under a cross-process exclusive lock.
+Teardown keeps a tombstone with status ``torn_down``.
+
+Owner allowlist: multi-owner scheduling is **deny-by-default** when
+``WH_ALLOWED_OWNERS`` / ``allowed_owners`` is empty (same policy as babysit
+discovery). Explicit non-empty allowlist required to allocate.
 
 Default policy: no production remote mutation (no merge / bare force-push APIs).
 """
@@ -29,8 +33,9 @@ import json
 import os
 import re
 import secrets
+import sys
 import tempfile
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
@@ -47,6 +52,8 @@ from worktrees_hives.findings import AgentRole
 from worktrees_hives.paths import default_worktree_base, user_data_dir
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
+
     from worktrees_hives.bridge import WhClient
 
 LAB_JOBS_SCHEMA_VERSION: int = 1
@@ -98,7 +105,7 @@ _LAB_JOB_FIELDS = frozenset(
 )
 
 
-@dataclass
+@dataclass(frozen=True, slots=True)
 class LabJob:
     """One lab hypothesis job (not a babysit PR job)."""
 
@@ -176,6 +183,7 @@ def default_lab_jobs_path(*, platform: str | None = None) -> Path:
 
 
 def _load_allowed_owners_from_env() -> frozenset[str]:
+    """Parse ``WH_ALLOWED_OWNERS``. Empty/unset/``*`` → empty set (deny allocate)."""
     if WH_ALLOWED_OWNERS_ENV not in os.environ:
         return frozenset()
     raw = os.environ[WH_ALLOWED_OWNERS_ENV].strip()
@@ -190,8 +198,6 @@ def _validate_segment(field_name: str, value: str) -> None:
             f"Invalid {field_name} segment {value!r}: "
             "must be a plain name without separators or leading dash"
         )
-    if "/" in value or "\\" in value or ":" in value:
-        raise LabJobError(f"Invalid {field_name} segment (contains separator): {value!r}")
 
 
 def _validate_ref(field_name: str, value: str) -> None:
@@ -214,6 +220,46 @@ def _slug_hypothesis(hypothesis_id: str) -> str:
     if not slug:
         slug = "hyp"
     return slug[:64]
+
+
+@contextlib.contextmanager
+def _exclusive_lock(path: Path) -> Iterator[None]:
+    """Cross-process exclusive lock for lab jobs read-modify-write."""
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        raise LabJobError(f"Cannot create lab jobs lock dir for {path}: {e}") from e
+    lock_path = path.parent / f".{path.name}.lock"
+    try:
+        with open(lock_path, "a+", encoding="utf-8") as lock_f:
+            if sys.platform == "win32":
+                import msvcrt
+
+                lock_f.seek(0)
+                if lock_f.read(1) == "":
+                    lock_f.write("0")
+                    lock_f.flush()
+                lock_f.seek(0)
+                msvcrt.locking(lock_f.fileno(), msvcrt.LK_LOCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(lock_f.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                with contextlib.suppress(OSError):
+                    if sys.platform == "win32":
+                        import msvcrt
+
+                        lock_f.seek(0)
+                        msvcrt.locking(lock_f.fileno(), msvcrt.LK_UNLCK, 1)
+                    else:
+                        import fcntl
+
+                        fcntl.flock(lock_f.fileno(), fcntl.LOCK_UN)
+    except OSError as e:
+        raise LabJobError(f"Cannot open lab jobs lock at {lock_path}: {e}") from e
 
 
 def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
@@ -267,10 +313,12 @@ class LabJobStore:
             raise LabJobError("lab jobs.jobs must be an object keyed by job_id")
         self._jobs = {}
         for jid, rec in jobs_raw.items():
-            job = LabJob.from_dict(rec if isinstance(rec, dict) else {})
+            if not isinstance(rec, dict):
+                raise LabJobError(f"job {jid!r} must be an object")
+            job = LabJob.from_dict(rec)
+            # Key is authoritative for the map.
             if job.job_id != str(jid):
-                # Prefer embedded job_id if present; key is authoritative for map.
-                job.job_id = str(jid)
+                job = replace(job, job_id=str(jid))
             self._jobs[str(jid)] = job
 
     def _save(self) -> None:
@@ -281,24 +329,50 @@ class LabJobStore:
         _atomic_write_json(self._path, payload)
 
     def get(self, job_id: str) -> LabJob | None:
-        """Return a job by id, or None."""
-        return self._jobs.get(job_id)
+        """Return a job by id, or None (reloads under lock)."""
+        with _exclusive_lock(self._path):
+            self._load()
+            return self._jobs.get(job_id)
 
     def list_jobs(self, *, status: LabJobStatus | None = None) -> list[LabJob]:
         """Return jobs, optionally filtered by status (store-primary)."""
-        jobs = list(self._jobs.values())
+        with _exclusive_lock(self._path):
+            self._load()
+            jobs = list(self._jobs.values())
         if status is not None:
             jobs = [j for j in jobs if j.status == status]
         return sorted(jobs, key=lambda j: j.created_at)
 
     def put(self, job: LabJob) -> None:
-        """Upsert a job and persist."""
-        self._jobs[job.job_id] = job
-        self._save()
+        """Upsert a job under lock (reload then save)."""
+        with _exclusive_lock(self._path):
+            self._load()
+            self._jobs[job.job_id] = job
+            self._save()
 
     def contains(self, job_id: str) -> bool:
         """Whether job_id exists (including torn_down tombstones)."""
-        return job_id in self._jobs
+        with _exclusive_lock(self._path):
+            self._load()
+            return job_id in self._jobs
+
+    def reserve_pending(self, job: LabJob) -> None:
+        """Atomically claim job_id as PENDING or raise if taken."""
+        with _exclusive_lock(self._path):
+            self._load()
+            if job.job_id in self._jobs:
+                raise LabJobExistsError(f"lab job already exists: {job.job_id}")
+            self._jobs[job.job_id] = job
+            self._save()
+
+    def drop_if_pending(self, job_id: str) -> None:
+        """Remove a PENDING reservation after a failed allocate."""
+        with _exclusive_lock(self._path):
+            self._load()
+            existing = self._jobs.get(job_id)
+            if existing is not None and existing.status == LabJobStatus.PENDING:
+                del self._jobs[job_id]
+                self._save()
 
 
 class LabJobManager:
@@ -315,7 +389,8 @@ class LabJobManager:
     store:
         Persistent job registry.
     allowed_owners:
-        Owner allowlist; ``None`` loads ``WH_ALLOWED_OWNERS``. Empty set = no restriction.
+        Non-empty owner allowlist. ``None`` loads ``WH_ALLOWED_OWNERS``.
+        Empty set **denies** all allocate calls (fail closed).
     """
 
     def __init__(
@@ -343,17 +418,18 @@ class LabJobManager:
             self.allowed_owners = frozenset(allowed_owners)
 
     def derive_path(self, owner: str, repo: str, job_id: str) -> str:
-        """Derive sandboxed worktree path under ``worktree_base``."""
+        """Derive sandboxed worktree path under ``worktree_base``.
+
+        Segments are validated; path is absolute join without following
+        intermediate symlinks for the escape check (component names only).
+        """
         _validate_segment("owner", owner)
         _validate_segment("repo", repo)
         _validate_segment("job_id", job_id)
         path = os.path.abspath(os.path.join(self.worktree_base, owner, repo, job_id))
-        try:
-            Path(path).resolve().relative_to(Path(self.worktree_base).resolve())
-        except ValueError as exc:
-            raise LabJobError(
-                f"worktree path escapes base {self.worktree_base!r}: {path!r}"
-            ) from exc
+        base = self.worktree_base
+        if path != base and not path.startswith(base + os.sep):
+            raise LabJobError(f"worktree path escapes base {base!r}: {path!r}")
         return path
 
     def allocate(
@@ -383,42 +459,50 @@ class LabJobManager:
 
         jid = job_id if job_id is not None else self._default_job_id(hypothesis_id)
         _validate_segment("job_id", jid)
-        if self.store.contains(jid):
-            raise LabJobExistsError(f"lab job already exists: {jid}")
 
         br = branch if branch is not None else f"lab/{hypothesis_id}"
         _validate_ref("branch", br)
 
         worktree_path = self.derive_path(owner, repo, jid)
-        if Path(worktree_path).exists():
-            raise LabJobExistsError(f"worktree already exists for this job: {worktree_path}")
+        now = _now_iso()
+        pending = LabJob(
+            job_id=jid,
+            hypothesis_id=hypothesis_id,
+            agent_id=str(agent_id).strip(),
+            role=role,
+            owner=owner,
+            repo=repo,
+            branch=br,
+            worktree_path=None,
+            status=LabJobStatus.PENDING,
+            created_at=now,
+            updated_at=now,
+        )
+        # Reserve job id before create so concurrent managers cannot collide.
+        self.store.reserve_pending(pending)
 
-        path, ret_branch = self._wh_create(owner, repo, jid, br)
+        path: str | None = None
         try:
+            if Path(worktree_path).exists():
+                raise LabJobExistsError(f"worktree already exists for this job: {worktree_path}")
+            path, ret_branch = self._wh_create(owner, repo, jid, br)
             if ret_branch != br:
                 raise LabJobError(f"wh returned branch {ret_branch!r}, expected {br!r}")
-
-            now = _now_iso()
-            job = LabJob(
-                job_id=jid,
-                hypothesis_id=hypothesis_id,
-                agent_id=str(agent_id).strip(),
-                role=role,
-                owner=owner,
-                repo=repo,
-                branch=ret_branch,
+            done = replace(
+                pending,
                 worktree_path=path,
+                branch=ret_branch,
                 status=LabJobStatus.ALLOCATED,
-                created_at=now,
-                updated_at=now,
+                updated_at=_now_iso(),
             )
-            self.store.put(job)
+            self.store.put(done)
+            return done
         except Exception:
-            # Compensating remove: worktree exists on disk but no store row yet.
-            with contextlib.suppress(LabJobError):
-                self._wh_remove(path, force=True)
+            if path is not None:
+                with contextlib.suppress(LabJobError):
+                    self._wh_remove(path, force=True)
+            self.store.drop_if_pending(jid)
             raise
-        return job
 
     def list_jobs(self, *, status: LabJobStatus | None = None) -> list[LabJob]:
         """List jobs from the store (primary source in v1)."""
@@ -437,12 +521,9 @@ class LabJobManager:
             return job
         path = job.worktree_path or self.derive_path(job.owner, job.repo, job.job_id)
         self._wh_remove(path, force=force)
-        now = _now_iso()
-        job.status = LabJobStatus.TORN_DOWN
-        job.updated_at = now
-        # Keep path for audit; worktree should be gone.
-        self.store.put(job)
-        return job
+        done = replace(job, status=LabJobStatus.TORN_DOWN, updated_at=_now_iso())
+        self.store.put(done)
+        return done
 
     def _default_job_id(self, hypothesis_id: str) -> str:
         base = f"lab-{_slug_hypothesis(hypothesis_id)}"
@@ -452,11 +533,12 @@ class LabJobManager:
 
     def _assert_owner_allowed(self, owner: str) -> None:
         allowed = self.allowed_owners
-        if (
-            allowed
-            and owner not in allowed
-            and owner.casefold() not in {a.casefold() for a in allowed}
-        ):
+        if not allowed:
+            raise LabJobError(
+                "Owner allowlist is empty (deny-by-default). "
+                f"Set {WH_ALLOWED_OWNERS_ENV} or pass allowed_owners= with at least one owner."
+            )
+        if owner not in allowed and owner.casefold() not in {a.casefold() for a in allowed}:
             raise LabJobError(
                 f"Owner {owner!r} is not in the configured allowlist "
                 f"({sorted(allowed)}). Set {WH_ALLOWED_OWNERS_ENV} or "
@@ -485,22 +567,21 @@ class LabJobManager:
         return path, ret_branch
 
     def _wh_remove(self, path: str, *, force: bool) -> None:
+        """Remove worktree; treat already-missing path as success for tombstones."""
         args: list[str] = ["worktree", "remove", path]
         if force:
             args.append("--force")
         try:
             resp = self._wh_run(*args)
         except LabJobError:
-            # Idempotent: missing path still allows teardown tombstone.
-            # ``wh`` often exits non-zero without an error envelope → WhProcessError.
             if not Path(path).exists():
                 return
             raise
-        if not isinstance(resp, SuccessResponse):
-            # Idempotent-ish: if already gone, still allow tombstone if path missing.
-            if not Path(path).exists():
-                return
-            raise LabJobError(f"wh worktree remove failed: {resp.error.code}: {resp.error.message}")
+        if isinstance(resp, SuccessResponse):
+            return
+        if not Path(path).exists():
+            return
+        raise LabJobError(f"wh worktree remove failed: {resp.error.code}: {resp.error.message}")
 
     def _wh_run(self, *args: str) -> SuccessResponse | ErrorResponse:
         try:
