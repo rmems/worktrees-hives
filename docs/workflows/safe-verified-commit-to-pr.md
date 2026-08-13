@@ -39,7 +39,8 @@ GitHub **MCP first**. Shell `gh` only if MCP is unavailable.
 5. Otherwise create the PR:
 
    - title reflects the issue
-   - body links the issue (`Fixes #<n>` only when the issue is fully done; otherwise `Refs #<n>`)
+   - body links the GitHub issue (`Fixes #<n>` only when the issue is fully done; otherwise `Refs #<n>`)
+   - if a Linear `RM-*` twin already exists, body also includes that issue’s URL or id; validate it matches the existing twin (do not invent one)
    - no merge flags
    - do not enable auto-merge
 
@@ -52,6 +53,7 @@ Suggested body:
 
 ## Issue
 Fixes #<n>   <!-- or Refs #<n> if partial -->
+Linear: RM-<n>  <!-- omit this line if no twin exists -->
 
 ## Test plan
 - [ ] Local gates from README.md
@@ -73,7 +75,8 @@ After the create/update call, record at least:
 | Field | Rule |
 | --- | --- |
 | `repo` | `owner/repo` |
-| `issue` | issue number |
+| `issue` | GitHub issue number |
+| `linear` | existing `RM-*` id/URL, or explicit none |
 | `pr` | PR number |
 | `url` | PR URL |
 | `branch` | job branch |
@@ -81,7 +84,9 @@ After the create/update call, record at least:
 | `status` | open / draft / blocked |
 | `notes` | residuals |
 
-Comment on the GitHub issue with PR URL, SHA, residuals, and agent name. Cross-link a Linear twin only if it already exists.
+Before treating the PR as handed off, validate: GitHub `Fixes`/`Refs` is present; if a Linear twin exists, the PR body contains that `RM-*` link and it matches the twin. Abort the handoff (do not merge) if either check fails.
+
+Comment on the GitHub issue with PR URL, SHA, residuals, and agent name. Mention the Linear twin only if it already exists.
 
 If an orchestrator is present, this handoff is what enqueueing babysit (#9) consumes. This workflow does not start babysit.
 
@@ -101,4 +106,4 @@ If the PR is already merged, report that a human merged it and stop.
 
 ## Done when
 
-An open (or draft) PR links the issue, `head_sha` matches the last push, the issue comment includes URL + SHA + agent, and no merge path was invoked.
+An open (or draft) PR links the GitHub issue, includes a matching Linear `RM-*` link when a twin exists, `head_sha` matches the last push, the issue comment includes URL + SHA + agent, and no merge path was invoked.
