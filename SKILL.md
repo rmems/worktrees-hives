@@ -7,6 +7,7 @@ Installable agent skill for the worktrees-hives hybrid orchestrator.
 Use this skill when:
 - Discovering work from GitHub or Linear issues
 - Spawning worker subagents for code changes
+- Running [Safe Issue → Verified Commit](docs/workflows/safe-issue-verified-commit.md) then [Safe Verified Commit → PR](docs/workflows/safe-verified-commit-to-pr.md)
 - Babysitting pull requests through CI
 - Reporting results back to the operator
 

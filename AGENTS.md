@@ -232,14 +232,10 @@ See GitHub #40 and the planned `docs/json-contract.md` for the complete contract
 
 ## Contribution workflow
 
-1. Run `bd prime`, inspect `bd ready`, and claim the relevant bead before non-trivial work.
-2. Read the linked GitHub or Linear issue and preserve its acceptance criteria.
-3. Start from an up-to-date base and create a focused feature branch.
-4. For runtime jobs, create an isolated worktree before editing. Do not share a writable worktree across agents.
-5. Keep Rust, Python, and skill changes within their ownership boundaries.
-6. Run the narrowest checks first, then the repository quality gates documented in `README.md`.
-7. Update or close Beads accurately, push all commits, and verify the branch is up to date with its remote.
-8. Open or update a PR and cross-link the relevant GitHub/Linear issues. Never merge it.
+Follow the portable worker contracts. They apply to every agent platform.
+
+1. **[Safe Issue → Verified Commit](docs/workflows/safe-issue-verified-commit.md)** ([#84](https://github.com/rmems/worktrees-hives/issues/84), isolation [#6](https://github.com/rmems/worktrees-hives/issues/6)): read the issue and repo docs, isolate a worktree/branch, implement, run README gates, commit, push, comment on the issue with SHA. Never edit `main`.
+2. **[Safe Verified Commit → PR](docs/workflows/safe-verified-commit-to-pr.md)** ([#8](https://github.com/rmems/worktrees-hives/issues/8) / [RM-123](https://linear.app/rpd-34/issue/RM-123/issue-pr-workflow-never-auto-merge)): open or update a PR that links the issue, hand off URL + SHA, never merge. Review checklist: [`REVIEW.md`](REVIEW.md). Babysit is a later cycle ([#9](https://github.com/rmems/worktrees-hives/issues/9)).
 
 ## Review expectations
 

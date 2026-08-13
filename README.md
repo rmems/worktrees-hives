@@ -101,6 +101,8 @@ Python will invoke `wh` from `WH_BIN` or `PATH` and consume the versioned JSON c
 ## Project documentation
 
 - [`AGENTS.md`](AGENTS.md) — agent roles, boundaries, data flow, and worktree rules
+- [`docs/workflows/safe-issue-verified-commit.md`](docs/workflows/safe-issue-verified-commit.md) — issue → verified push
+- [`docs/workflows/safe-verified-commit-to-pr.md`](docs/workflows/safe-verified-commit-to-pr.md) — verified push → PR (never merge)
 - [`REVIEW.md`](REVIEW.md) — pull-request lifecycle and review checklist
 - Hybrid foundation epic: [GitHub #21](https://github.com/rmems/worktrees-hives/issues/21)
 - Rust core epic: [GitHub #22](https://github.com/rmems/worktrees-hives/issues/22)

@@ -1,0 +1,109 @@
+# Safe Issue → Verified Commit
+
+Portable worker contract for any coding agent (Codex, Claude, Grok, Hermes, Devin, or later). Stops at a verified push and an issue comment. Does not open a PR — that is [Safe Verified Commit → PR](safe-verified-commit-to-pr.md).
+
+Safety rules live in [`AGENTS.md`](../../AGENTS.md) and [`SKILL.md`](../../SKILL.md). This file does not relax them.
+
+Contracts: isolation [#6](https://github.com/rmems/worktrees-hives/issues/6), skill/procedure [#84](https://github.com/rmems/worktrees-hives/issues/84).
+
+## Inputs
+
+| Input | Required | Notes |
+| --- | --- | --- |
+| `issue` | yes | GitHub issue URL or number |
+| `owner` / `repo` | no | If omitted, resolve from `git remote` in the current repository |
+| `dry_run` | no | Intake + isolate + plan only. No commit, push, or issue comment |
+
+Do not hard-code an owner. Multi-repo discovery and scheduling still use `WH_ALLOWED_OWNERS` / explicit API args.
+
+## Hard stops
+
+Abort and report if any of these fail:
+
+- Issue is closed, is a pull request, or has no actionable acceptance criteria
+- Owner is outside the configured allowlist (unless the operator named this repo/job explicitly)
+- Worktree path, branch, or cleanliness check fails
+- Any required quality gate fails
+- A deny-listed command would be required (merge, bare `--force` / `-f`)
+- This is already a babysit cycle and the 3 code-fix commit cap is exhausted
+
+## Stages
+
+### 1. Intake (read-only)
+
+1. Read the GitHub issue with **GitHub MCP first**. Shell `gh` only if MCP is unavailable.
+2. Read `AGENTS.md` or `CLAUDE.md`, `README.md`, and [`REVIEW.md`](../../REVIEW.md).
+3. Extract acceptance criteria. Preserve them. Do not invent extra scope.
+4. If a Linear twin is already linked, note its id. Do not create a second twin.
+
+### 2. Isolate
+
+1. If this repo uses Beads, run `bd prime`, inspect `bd ready`, and claim the relevant bead.
+2. Start from an up-to-date base. Never edit `main` or `master`.
+3. Create or reuse a dedicated branch and isolated worktree:
+   - Prefer `wh --json worktree create` when `wh` is on `PATH` or `WH_BIN`.
+   - Otherwise `git fetch` and `git worktree add` from the fetched default-branch tip.
+4. Suggested issue branch: `hive/issue-<n>-<short-slug>` (document any local override).
+5. Run the pre-edit checklist in `AGENTS.md` / `SKILL.md`: worktree path, `git branch --show-current`, clean tree, expected remote, no path escape.
+6. One writable worktree per job. Do not share it with another agent.
+
+### 3. Implement
+
+- Change only that worktree and branch.
+- Stay inside Rust / Python / skill ownership (`AGENTS.md`).
+- No drive-by refactors. No files outside the worktree.
+
+### 4. Validate (fail-closed)
+
+Run the narrowest relevant checks first, then the gates in `README.md`.
+
+For this repository, unless the issue names a smaller subset:
+
+```bash
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+```
+
+If `python/` changed, also run the Python test extra documented in `README.md`.
+
+If a required gate fails, **do not commit**. Report residuals on the issue.
+
+Use a time budget on long builds. A hang is a residual, not a license to skip the gate and commit anyway.
+
+### 5. Commit
+
+- One or few focused commits. Scoped `git add` (no secrets, no unrelated dirt).
+- Message names the agent and links the GitHub issue (and Linear id if already known).
+- Beads status matches reality.
+
+### 6. Push
+
+```bash
+git pull --rebase
+git push
+```
+
+- Never merge.
+- Never `git push --force` or `git push -f`.
+- `--force-with-lease` only on **this** job branch after a rebase you own, after verifying branch and remote ref.
+
+### 7. Report
+
+Comment on the GitHub issue (MCP first) with:
+
+- branch
+- pushed SHA (`git rev-parse HEAD` **after** the last push)
+- what landed
+- residual blockers
+- agent name
+
+Do not claim a merge. Do not open a PR here.
+
+## Dry run
+
+Stop after isolate + a written implementation plan. No commits, push, or issue comment.
+
+## Done when
+
+Branch is pushed, required gates passed (or residuals are explicit and nothing was committed over a failed gate), and the issue has a SHA-bearing comment.
