@@ -1,0 +1,39 @@
+docs/examples/research-contract-cloud-agent.json
+  s_d65c0696c166a5::t_4b8722fe249ccd 1-63
+python/src/worktrees_hives/research.py
+  s_d65c0696c166a5::t_d5445795183222 176-184,200-205,326-328
+  s_d65c0696c166a5::t_6ab5cdadaff9a4 1-173,175,185-199,206-325,329-345
+  s_d65c0696c166a5::t_398521dd4bdd15 174
+python/src/worktrees_hives/__init__.py
+  s_d65c0696c166a5::t_711016ec659a18 51,105-110,132,175-177,213
+docs/json-contract.md
+  s_d65c0696c166a5::t_4b8722fe249ccd 329-333,337-375,380,399,416
+  s_d65c0696c166a5::t_4e67dc1074d56f 334-336,376-379
+python/tests/test_research_contract.py
+  s_d65c0696c166a5::t_b5de55820344a4 6,254-259
+  s_d65c0696c166a5::t_d5445795183222 194-197
+  s_d65c0696c166a5::t_fc6cc94498131f 1-5,7-21,23-193,198-238,241-253,260-299
+  s_d65c0696c166a5::t_996264aec660d5 22,239-240
+docs/superpowers/specs/2026-08-12-research-contract-design.md
+  s_d65c0696c166a5::t_b5de55820344a4 86
+  s_d65c0696c166a5::t_41394b68caea0b 105-111
+  s_d65c0696c166a5::t_4e67dc1074d56f 75-76
+python/src/worktrees_hives/errors.py
+  s_d65c0696c166a5::t_6ab5cdadaff9a4 61-68
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "59fa5e8fbefc3603d7c73fe442ee77cb107344f4",
+  "prompts": {},
+  "sessions": {
+    "s_d65c0696c166a5": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff82b-61af-7903-8606-8af5d223e562",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Raul Montoya Cardenas <montoyaraul34@gmail.com>"
+    }
+  }
+}
