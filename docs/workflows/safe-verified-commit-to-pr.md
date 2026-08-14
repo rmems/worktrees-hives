@@ -84,9 +84,15 @@ After the create/update call, record at least:
 | `status` | open / draft / blocked |
 | `notes` | residuals |
 
-Before treating the PR as handed off, validate: GitHub `Fixes`/`Refs` is present; if a Linear twin exists, the PR body contains that `RM-*` link and it matches the twin. Abort the handoff (do not merge) if either check fails.
+Before treating the PR as handed off, validate **all** of the following (GitHub **MCP first**):
 
-Comment on the GitHub issue with PR URL, SHA, residuals, and agent name. Mention the Linear twin only if it already exists.
+1. GitHub `Fixes`/`Refs` is present on the PR.
+2. If a Linear twin exists, the PR body contains that `RM-*` link and it matches the twin.
+3. Query the remote source branch tip and the PR head SHA via GitHub MCP. Both must equal the recorded `head_sha` (the `git rev-parse HEAD` value after the last push).
+
+Abort the handoff (do **not** merge, do not claim handoff complete) if any check fails — including when either remote SHA differs from `head_sha`.
+
+Comment on the GitHub issue with PR URL, the **validated** pushed commit SHA, residuals, and agent name. Mention the Linear twin only if it already exists.
 
 If an orchestrator is present, this handoff is what enqueueing babysit (#9) consumes. This workflow does not start babysit.
 
@@ -106,4 +112,4 @@ If the PR is already merged, report that a human merged it and stop.
 
 ## Done when
 
-An open (or draft) PR links the GitHub issue, includes a matching Linear `RM-*` link when a twin exists, `head_sha` matches the last push, the issue comment includes URL + SHA + agent, and no merge path was invoked.
+An open (or draft) PR links the GitHub issue, includes a matching Linear `RM-*` link when a twin exists, remote source-branch tip and PR head both equal the recorded `head_sha`, the issue comment includes URL + validated SHA + agent, and no merge path was invoked.

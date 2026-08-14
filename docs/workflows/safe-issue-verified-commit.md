@@ -85,7 +85,7 @@ Immediately before `git pull --rebase` or `git push`, fail closed if any of thes
 
 Then:
 
-1. `git pull --rebase`
+1. `git pull --rebase`. Require a **successful, conflict-free** rebase before anything else. If rebase fails (non-zero exit) or leaves conflicts, **stop**: record the rebase issue as a residual, do **not** run validation gates, and do **not** `git push`.
 2. Re-run **all** required validation gates from stage 4 (same process timeouts) on the rebased tree. The commit about to be pushed must be covered. If any gate fails or times out, **do not push**. Report residuals.
 3. `git push`
 
