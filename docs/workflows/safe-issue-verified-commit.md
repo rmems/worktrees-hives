@@ -26,6 +26,7 @@ Abort and report if any of these fail:
 - `wh` is missing and no enforcing wrapper is available (mutating runs)
 - Any required quality gate fails or times out
 - A deny-listed command would be required (merge, bare `--force` / `-f`)
+- `git push` exits non-zero or the remote rejects the push
 - This is already a babysit cycle and the 3 code-fix commit cap is exhausted
 
 ## Stages
@@ -87,7 +88,7 @@ Then:
 
 1. `git pull --rebase`. Require a **successful, conflict-free** rebase before anything else. If rebase fails (non-zero exit) or leaves conflicts, **stop**: record the rebase issue as a residual, do **not** run validation gates, and do **not** `git push`.
 2. Re-run **all** required validation gates from stage 4 (same process timeouts) on the rebased tree. The commit about to be pushed must be covered. If any gate fails or times out, **do not push**. Report residuals.
-3. `git push`
+3. `git push`. If the command exits non-zero or the remote rejects the update, **stop before Stage 7**: record the push failure as a residual. Do **not** report `git rev-parse HEAD` as the pushed SHA.
 
 - Never merge.
 - Never `git push --force` or `git push -f`.
@@ -95,15 +96,17 @@ Then:
 
 ### 7. Report
 
+Run this stage **only** after Stage 6 step 3 succeeded (push accepted by the remote).
+
 Comment on the GitHub issue (MCP first) with:
 
 - branch
-- pushed SHA (`git rev-parse HEAD` **after** the last push)
+- pushed SHA (`git rev-parse HEAD` **after** that successful push)
 - what landed
 - residual blockers
 - agent name
 
-Do not claim a merge. Do not open a PR here.
+Do not claim a merge. Do not open a PR here. A local HEAD SHA after a failed or rejected push is not a completion report.
 
 ## Dry run
 
@@ -111,4 +114,4 @@ Stop after isolate + a written implementation plan. No commits, push, or issue c
 
 ## Done when
 
-Branch is pushed, required gates passed (or residuals are explicit and nothing was committed over a failed gate), and the issue has a SHA-bearing comment.
+Branch is pushed (remote accepted), required gates passed (or residuals are explicit and nothing was committed or reported as pushed over a failed gate, timeout, rebase failure, or rejected push), and the issue has a SHA-bearing comment only after that successful push.

@@ -84,13 +84,15 @@ After the create/update call, record at least:
 | `status` | open / draft / blocked |
 | `notes` | residuals |
 
-Before treating the PR as handed off, validate **all** of the following (GitHub **MCP first**):
+Before treating the PR as handed off, validate **all** of the following via GitHub **MCP first** (do not invoke merge commands or APIs):
 
-1. GitHub `Fixes`/`Refs` is present on the PR.
-2. If a Linear twin exists, the PR body contains that `RM-*` link and it matches the twin.
-3. Query the remote source branch tip and the PR head SHA via GitHub MCP. Both must equal the recorded `head_sha` (the `git rev-parse HEAD` value after the last push).
+1. The PR is still **open** or **draft**. Query this state through GitHub MCP.
+2. Auto-merge is **disabled** and the PR is **not** in the merge queue. Query both through GitHub MCP.
+3. The PR’s GitHub `Fixes` or `Refs` reference **targets the input issue** and uses the required completion keyword (`Fixes` only when the issue is fully done; otherwise `Refs`). Absent, wrong number, or the wrong keyword fails.
+4. If a Linear twin exists, the PR body contains that `RM-*` link and it matches the twin.
+5. Query the remote source branch tip and the PR head SHA via GitHub MCP. Both must equal the recorded `head_sha` (the `git rev-parse HEAD` value after the last successful push).
 
-Abort the handoff (do **not** merge, do not claim handoff complete) if any check fails — including when either remote SHA differs from `head_sha`.
+Abort the handoff and report a residual (do **not** merge, do not claim handoff complete) if any check fails — including a closed/merged PR, auto-merge or merge-queue enabled, a GitHub issue reference that is missing or points elsewhere, or a remote SHA that differs from `head_sha`.
 
 Comment on the GitHub issue with PR URL, the **validated** pushed commit SHA, residuals, and agent name. Mention the Linear twin only if it already exists.
 
@@ -112,4 +114,4 @@ If the PR is already merged, report that a human merged it and stop.
 
 ## Done when
 
-An open (or draft) PR links the GitHub issue, includes a matching Linear `RM-*` link when a twin exists, remote source-branch tip and PR head both equal the recorded `head_sha`, the issue comment includes URL + validated SHA + agent, and no merge path was invoked.
+An open (or draft) PR has auto-merge and merge-queue disabled, `Fixes`/`Refs` the **input** GitHub issue with the required keyword, includes a matching Linear `RM-*` link when a twin exists, remote source-branch tip and PR head both equal the recorded `head_sha`, the issue comment includes URL + validated SHA + agent, and no merge path was invoked.
