@@ -6,6 +6,18 @@ Orchestration policy only. Worktrees, path sandbox, branch checks, and safe
 
 __version__ = "0.2.0"
 
+from worktrees_hives.aggregate import (
+    AGGREGATE_SCHEMA_VERSION,
+    NEVER_MERGE_LINE,
+    REQUIRED_AGGREGATE_MD_SECTIONS,
+    AggregateReport,
+    AggregateUnit,
+    UnitOutcome,
+    collect_unit,
+    parse_aggregate_json,
+    validate_aggregate_markdown,
+    write_aggregate_pair,
+)
 from worktrees_hives.attribution import (
     AttributionConfig,
     AttributionPlacement,
@@ -46,6 +58,7 @@ from worktrees_hives.claim import (
 )
 from worktrees_hives.contract import ErrorResponse, Response, SuccessResponse
 from worktrees_hives.errors import (
+    AggregateValidationError,
     FindingsValidationError,
     PolicyError,
     ResearchValidationError,
@@ -123,14 +136,20 @@ from worktrees_hives.stacks import (
 from worktrees_hives.stacks import PRState as StackPRState
 
 __all__ = [
+    "AGGREGATE_SCHEMA_VERSION",
     "DEFAULT_ALLOWED_OWNERS",
     "FINDINGS_JSON_NAME",
     "FINDINGS_MD_NAME",
     "FINDINGS_SCHEMA_VERSION",
     "LAB_JOBS_SCHEMA_VERSION",
+    "NEVER_MERGE_LINE",
+    "REQUIRED_AGGREGATE_MD_SECTIONS",
     "REQUIRED_MD_SECTIONS",
     "RESEARCH_CONTRACT_SCHEMA_VERSION",
     "AgentRole",
+    "AggregateReport",
+    "AggregateUnit",
+    "AggregateValidationError",
     "AttributionConfig",
     "AttributionPlacement",
     "BabysitCycle",
@@ -184,6 +203,7 @@ __all__ = [
     "StackType",
     "SuccessResponse",
     "ThreadAction",
+    "UnitOutcome",
     "WhBinaryNotFoundError",
     "WhClient",
     "WhError",
@@ -199,6 +219,7 @@ __all__ = [
     "classify_check",
     "classify_checks",
     "classify_pr",
+    "collect_unit",
     "default_lab_jobs_path",
     "empty_findings_markdown_template",
     "find_standalone_prs",
@@ -208,6 +229,7 @@ __all__ = [
     "load_allowed_owners_from_env",
     "load_findings_pair",
     "order_prs_bottom_up",
+    "parse_aggregate_json",
     "parse_check_entry",
     "parse_findings_json",
     "parse_research_json",
@@ -215,6 +237,8 @@ __all__ = [
     "resolve_allowed_owners",
     "run_lab_unit",
     "should_rerun",
+    "validate_aggregate_markdown",
     "validate_findings_markdown",
+    "write_aggregate_pair",
     "write_findings_pair",
 ]

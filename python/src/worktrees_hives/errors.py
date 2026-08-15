@@ -66,3 +66,11 @@ class ResearchValidationError(WhError):
     def __init__(self, detail: str) -> None:
         self.detail = detail
         super().__init__(f"Invalid research contract: {detail}")
+
+
+class AggregateValidationError(WhError):
+    """Raised when an aggregate discoveries report (JSON and/or Markdown) is invalid."""
+
+    def __init__(self, detail: str) -> None:
+        self.detail = detail
+        super().__init__(f"Invalid aggregate report: {detail}")
