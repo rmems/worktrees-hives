@@ -15,7 +15,7 @@ always carries never-merge language and validation fails without it.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
@@ -78,7 +78,12 @@ class AggregateUnit:
             and self.report is not None
         ):
             raise AggregateValidationError(f"{self.outcome} unit must not carry a report")
-        if self.report is not None and self.report.hypothesis_id != self.hypothesis_id:
+        # Whitespace-insensitive: the #82 findings contract normalizes identifiers
+        # on parse, so padded unit ids must still round-trip through from_dict.
+        if (
+            self.report is not None
+            and self.report.hypothesis_id.strip() != self.hypothesis_id.strip()
+        ):
             raise AggregateValidationError(
                 f"unit.report hypothesis_id {self.report.hypothesis_id!r} does not match "
                 f"unit hypothesis_id {self.hypothesis_id!r}"
@@ -135,11 +140,6 @@ class AggregateUnit:
                 report = FindingsReport.from_dict(report_raw)
             except FindingsValidationError as exc:
                 raise AggregateValidationError(f"unit.report invalid: {exc.detail}") from exc
-            # FindingsReport.from_dict strips identifiers. Restore the raw id
-            # when it already matched the unit so padded ids still round-trip.
-            raw_hid = report_raw.get("hypothesis_id")
-            if raw_hid == hypothesis_id and report.hypothesis_id != hypothesis_id:
-                report = replace(report, hypothesis_id=hypothesis_id)
         detail = raw.get("detail")
         if detail is not None and not isinstance(detail, str):
             raise AggregateValidationError("unit.detail must be a string or omitted")
@@ -427,12 +427,14 @@ def _require_nonempty_str(raw: dict[str, Any], key: str) -> str:
 
 def _cell_inline(text: str) -> str:
     """Escape free text for a Markdown table cell / list item (incl. pipes)."""
-    return _findings._escape_md_inline(text).replace("|", "\\|").replace("\n", " ")
+    escaped = _findings._escape_md_inline(text).replace("|", "\\|")
+    return escaped.replace("\n", " ").replace("\r", " ")
 
 
 def _cell_code(text: str) -> str:
     """Escape text for an inline code span inside a table cell."""
-    return _findings._escape_md_code(text).replace("|", "\\|").replace("\n", " ")
+    escaped = _findings._escape_md_code(text).replace("|", "\\|")
+    return escaped.replace("\n", " ").replace("\r", " ")
 
 
 def _link_dest(path: str) -> str:
@@ -440,7 +442,7 @@ def _link_dest(path: str) -> str:
 
     Percent-encodes ``|`` (splits GFM table cells before inline parsing),
     ``\\`` (CommonMark backslash-escapes apply inside ``<...>`` destinations),
-    the bracket delimiters, and newlines.
+    the bracket delimiters, and line breaks (``\\n`` and ``\\r``).
     """
     escaped = (
         path.replace("\\", "%5C")
@@ -448,5 +450,6 @@ def _link_dest(path: str) -> str:
         .replace(">", "%3E")
         .replace("|", "%7C")
         .replace("\n", "%0A")
+        .replace("\r", "%0D")
     )
     return "<" + escaped + ">"

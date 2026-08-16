@@ -169,6 +169,9 @@ class TestAggregateUnitInvariants:
         assert unit.to_dict() == raw
 
     def test_padded_hypothesis_id_round_trips_with_embedded_report(self) -> None:
+        # Unit-level fields keep their bytes; the embedded report normalizes
+        # its identifiers per the #82 findings contract. Round-trip must not
+        # raise, and the ids stay equivalent modulo whitespace.
         hid = "  H-1  "
         unit = AggregateUnit(
             hypothesis_id=hid,
@@ -178,10 +181,9 @@ class TestAggregateUnitInvariants:
             report=_valid_report(hid),
         )
         again = parse_aggregate_json(AggregateReport(units=(unit,)).to_json())
-        assert again.units[0] == unit
         assert again.units[0].hypothesis_id == hid
         assert again.units[0].report is not None
-        assert again.units[0].report.hypothesis_id == hid
+        assert again.units[0].report.hypothesis_id == "H-1"
 
 
 class TestAggregateMarkdown:
@@ -253,6 +255,11 @@ class TestAggregateMarkdown:
         unit = collect_unit("H-1", "runs\\a.json", "runs\\a.md")
         md = AggregateReport(units=(unit,)).to_markdown()
         assert "[findings.md](<runs%5Ca.md>)" in md
+
+    def test_carriage_return_in_findings_path_is_encoded_in_link(self) -> None:
+        unit = collect_unit("H-1", "runs\ra.json", "runs\ra.md")
+        md = AggregateReport(units=(unit,)).to_markdown()
+        assert "[findings.md](<runs%0Da.md>)" in md
 
 
 class TestValidateAggregateMarkdown:
