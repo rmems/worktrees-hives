@@ -69,4 +69,4 @@ Versioned independently of the wh CLI envelope and the per-run findings schema. 
 
 ## Policy
 
-This format is informational only. **Never merge** and never auto-merge based on an aggregate report; pull requests always require human review.
+This aggregate report is informational only. **Never merge** and never auto-merge based on it; pull requests always require human review.

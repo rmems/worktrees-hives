@@ -78,6 +78,11 @@ class AggregateUnit:
             and self.report is not None
         ):
             raise AggregateValidationError(f"{self.outcome} unit must not carry a report")
+        if self.report is not None and self.report.hypothesis_id != self.hypothesis_id:
+            raise AggregateValidationError(
+                f"unit.report hypothesis_id {self.report.hypothesis_id!r} does not match "
+                f"unit hypothesis_id {self.hypothesis_id!r}"
+            )
 
     @property
     def is_failure(self) -> bool:
@@ -119,8 +124,7 @@ class AggregateUnit:
             outcome = UnitOutcome(outcome_raw)
         except ValueError as exc:
             raise AggregateValidationError(
-                f"unit.outcome must be one of {[e.value for e in UnitOutcome]}, "
-                f"got {outcome_raw!r}"
+                f"unit.outcome must be one of {[e.value for e in UnitOutcome]}, got {outcome_raw!r}"
             ) from exc
         report_raw = raw.get("report")
         report: FindingsReport | None = None
@@ -209,6 +213,15 @@ class AggregateReport:
     attribution: str | None = None
     schema_version: int = AGGREGATE_SCHEMA_VERSION
 
+    def __post_init__(self) -> None:
+        # Direct construction must uphold the same invariant from_dict enforces,
+        # so to_json() can never emit a payload parse_aggregate_json() rejects.
+        if self.schema_version != AGGREGATE_SCHEMA_VERSION:
+            raise AggregateValidationError(
+                f"unsupported schema_version {self.schema_version} "
+                f"(expected {AGGREGATE_SCHEMA_VERSION})"
+            )
+
     def counts(self) -> dict[str, int]:
         """Derived summary counts (also embedded, informationally, in JSON)."""
         by_outcome = {outcome: 0 for outcome in UnitOutcome}
@@ -295,8 +308,7 @@ class AggregateReport:
             for unit in failures:
                 why = unit.detail if unit.detail else "no detail recorded"
                 lines.append(
-                    f"- `{_cell_code(unit.hypothesis_id)}` — `{unit.outcome}`: "
-                    f"{_cell_inline(why)}"
+                    f"- `{_cell_code(unit.hypothesis_id)}` — `{unit.outcome}`: {_cell_inline(why)}"
                 )
         else:
             lines.append("_None._")
@@ -318,8 +330,7 @@ class AggregateReport:
             raise AggregateValidationError("schema_version must be an int")
         if schema_version != AGGREGATE_SCHEMA_VERSION:
             raise AggregateValidationError(
-                f"unsupported schema_version {schema_version} "
-                f"(expected {AGGREGATE_SCHEMA_VERSION})"
+                f"unsupported schema_version {schema_version} (expected {AGGREGATE_SCHEMA_VERSION})"
             )
         counts_raw = raw.get("counts")
         if counts_raw is not None and not isinstance(counts_raw, dict):
@@ -363,9 +374,7 @@ def validate_aggregate_markdown(text: str) -> None:
         raise AggregateValidationError("aggregate Markdown is empty")
     headings = _findings._extract_headings_outside_code_blocks(text)
     missing = [
-        s
-        for s in REQUIRED_AGGREGATE_MD_SECTIONS
-        if _findings._normalize_heading(s) not in headings
+        s for s in REQUIRED_AGGREGATE_MD_SECTIONS if _findings._normalize_heading(s) not in headings
     ]
     if missing:
         raise AggregateValidationError(
@@ -415,5 +424,17 @@ def _cell_code(text: str) -> str:
 
 
 def _link_dest(path: str) -> str:
-    """Angle-bracket link destination; tolerates spaces in report paths."""
-    return "<" + path.replace("<", "%3C").replace(">", "%3E").replace("\n", "%0A") + ">"
+    """Angle-bracket link destination; tolerates spaces in report paths.
+
+    Percent-encodes ``|`` (splits GFM table cells before inline parsing),
+    ``\\`` (CommonMark backslash-escapes apply inside ``<...>`` destinations),
+    the bracket delimiters, and newlines.
+    """
+    escaped = (
+        path.replace("\\", "%5C")
+        .replace("<", "%3C")
+        .replace(">", "%3E")
+        .replace("|", "%7C")
+        .replace("\n", "%0A")
+    )
+    return "<" + escaped + ">"

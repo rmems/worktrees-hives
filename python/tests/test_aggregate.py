@@ -139,6 +139,20 @@ class TestAggregateUnitInvariants:
                 report=_valid_report(),
             )
 
+    def test_report_hypothesis_must_match_unit(self) -> None:
+        with pytest.raises(AggregateValidationError, match="does not match"):
+            AggregateUnit(
+                hypothesis_id="H-001",
+                findings_json="a.json",
+                findings_md="a.md",
+                outcome=UnitOutcome.REPORTED,
+                report=_valid_report("H-002"),
+            )
+
+    def test_direct_construction_rejects_bad_schema_version(self) -> None:
+        with pytest.raises(AggregateValidationError, match="unsupported"):
+            AggregateReport(units=(), schema_version=AGGREGATE_SCHEMA_VERSION + 1)
+
 
 class TestAggregateMarkdown:
     def _mixed_report(self, tmp_path: Path, attribution: str | None = None) -> AggregateReport:
@@ -149,9 +163,7 @@ class TestAggregateMarkdown:
         )
         jpath3, mpath3 = _write_pair(tmp_path, "H-003")
         timeout_unit = collect_unit("H-003", jpath3, mpath3, timed_out=True)
-        return AggregateReport(
-            units=(ok_unit, missing_unit, timeout_unit), attribution=attribution
-        )
+        return AggregateReport(units=(ok_unit, missing_unit, timeout_unit), attribution=attribution)
 
     def test_renders_required_sections_and_validates(self, tmp_path: Path) -> None:
         md = self._mixed_report(tmp_path).to_markdown()
@@ -201,6 +213,16 @@ class TestAggregateMarkdown:
         md = AggregateReport(units=(unit,)).to_markdown()
         assert "H\\|X" in md
         validate_aggregate_markdown(md)
+
+    def test_pipe_in_findings_path_is_encoded_in_link(self, tmp_path: Path) -> None:
+        unit = collect_unit("H-1", tmp_path / "a|b" / "f.json", tmp_path / "a|b" / "f.md")
+        md = AggregateReport(units=(unit,)).to_markdown()
+        assert f"[findings.md](<{tmp_path}/a%7Cb/f.md>)" in md
+
+    def test_backslash_in_findings_path_is_encoded_in_link(self) -> None:
+        unit = collect_unit("H-1", "runs\\a.json", "runs\\a.md")
+        md = AggregateReport(units=(unit,)).to_markdown()
+        assert "[findings.md](<runs%5Ca.md>)" in md
 
 
 class TestValidateAggregateMarkdown:
@@ -264,9 +286,7 @@ class TestAggregateJson:
 
     def test_wrong_schema_version_fails(self) -> None:
         with pytest.raises(AggregateValidationError, match="unsupported"):
-            AggregateReport.from_dict(
-                {"schema_version": AGGREGATE_SCHEMA_VERSION + 1, "units": []}
-            )
+            AggregateReport.from_dict({"schema_version": AGGREGATE_SCHEMA_VERSION + 1, "units": []})
 
     def test_bool_schema_version_fails(self) -> None:
         with pytest.raises(AggregateValidationError, match="int"):
