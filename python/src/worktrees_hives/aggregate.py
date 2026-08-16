@@ -15,7 +15,7 @@ always carries never-merge language and validation fails without it.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
@@ -135,6 +135,11 @@ class AggregateUnit:
                 report = FindingsReport.from_dict(report_raw)
             except FindingsValidationError as exc:
                 raise AggregateValidationError(f"unit.report invalid: {exc.detail}") from exc
+            # FindingsReport.from_dict strips identifiers. Restore the raw id
+            # when it already matched the unit so padded ids still round-trip.
+            raw_hid = report_raw.get("hypothesis_id")
+            if raw_hid == hypothesis_id and report.hypothesis_id != hypothesis_id:
+                report = replace(report, hypothesis_id=hypothesis_id)
         detail = raw.get("detail")
         if detail is not None and not isinstance(detail, str):
             raise AggregateValidationError("unit.detail must be a string or omitted")

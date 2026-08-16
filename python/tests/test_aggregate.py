@@ -168,6 +168,21 @@ class TestAggregateUnitInvariants:
         assert unit.findings_json == "runs/H-1/findings.json "
         assert unit.to_dict() == raw
 
+    def test_padded_hypothesis_id_round_trips_with_embedded_report(self) -> None:
+        hid = "  H-1  "
+        unit = AggregateUnit(
+            hypothesis_id=hid,
+            findings_json="a.json",
+            findings_md="a.md",
+            outcome=UnitOutcome.REPORTED,
+            report=_valid_report(hid),
+        )
+        again = parse_aggregate_json(AggregateReport(units=(unit,)).to_json())
+        assert again.units[0] == unit
+        assert again.units[0].hypothesis_id == hid
+        assert again.units[0].report is not None
+        assert again.units[0].report.hypothesis_id == hid
+
 
 class TestAggregateMarkdown:
     def _mixed_report(self, tmp_path: Path, attribution: str | None = None) -> AggregateReport:
