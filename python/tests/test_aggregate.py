@@ -153,6 +153,21 @@ class TestAggregateUnitInvariants:
         with pytest.raises(AggregateValidationError, match="unsupported"):
             AggregateReport(units=(), schema_version=AGGREGATE_SCHEMA_VERSION + 1)
 
+    def test_direct_construction_rejects_blank_attribution(self) -> None:
+        with pytest.raises(AggregateValidationError, match="attribution"):
+            AggregateReport(units=(), attribution="  ")
+
+    def test_from_dict_preserves_field_whitespace(self) -> None:
+        raw = {
+            "hypothesis_id": "H-1",
+            "findings_json": "runs/H-1/findings.json ",
+            "findings_md": "runs/H-1/findings.md ",
+            "outcome": "missing_report",
+        }
+        unit = AggregateUnit.from_dict(raw)
+        assert unit.findings_json == "runs/H-1/findings.json "
+        assert unit.to_dict() == raw
+
 
 class TestAggregateMarkdown:
     def _mixed_report(self, tmp_path: Path, attribution: str | None = None) -> AggregateReport:

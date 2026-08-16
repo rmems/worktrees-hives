@@ -214,13 +214,15 @@ class AggregateReport:
     schema_version: int = AGGREGATE_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
-        # Direct construction must uphold the same invariant from_dict enforces,
+        # Direct construction must uphold the same invariants from_dict enforces,
         # so to_json() can never emit a payload parse_aggregate_json() rejects.
         if self.schema_version != AGGREGATE_SCHEMA_VERSION:
             raise AggregateValidationError(
                 f"unsupported schema_version {self.schema_version} "
                 f"(expected {AGGREGATE_SCHEMA_VERSION})"
             )
+        if self.attribution is not None and not self.attribution.strip():
+            raise AggregateValidationError("attribution must be a non-empty string or None")
 
     def counts(self) -> dict[str, int]:
         """Derived summary counts (also embedded, informationally, in JSON)."""
@@ -407,10 +409,15 @@ def write_aggregate_pair(
 
 
 def _require_nonempty_str(raw: dict[str, Any], key: str) -> str:
+    """Require a non-blank string but return it unmodified.
+
+    Parsing must not mutate identifiers or paths (a run directory may
+    legitimately end in whitespace), so JSON round-trips stay byte-identical.
+    """
     val = raw.get(key)
     if not isinstance(val, str) or not val.strip():
         raise AggregateValidationError(f"unit.{key} is required non-empty string")
-    return val.strip()
+    return val
 
 
 def _cell_inline(text: str) -> str:
