@@ -1,0 +1,22 @@
+python/src/worktrees_hives/aggregate.py
+  s_b17d7134156c34::t_b6de5e1f3fd9e6 412-416,420
+  s_b17d7134156c34::t_a2acbe4e373c3c 217,224-225
+python/tests/test_aggregate.py
+  s_b17d7134156c34::t_9f0ff96babc8c7 156-170
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "901a319f64ea8d9225dd56e129e94cbe0d384e8b",
+  "prompts": {},
+  "sessions": {
+    "s_b17d7134156c34": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "eb6edf13-51cc-42f1-811c-5e47eeae420b",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Raul Montoya Cardenas <montoyaraul34@gmail.com>"
+    }
+  }
+}
