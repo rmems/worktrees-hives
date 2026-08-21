@@ -1,0 +1,26 @@
+docs/superpowers/plans/2026-08-18-research-roles.md
+  s_f2dac664fbf228::t_92922f9efd145b 523-525
+REVIEW.md
+  s_f2dac664fbf228::t_92922f9efd145b 80
+python/src/worktrees_hives/research_roles.py
+  s_f2dac664fbf228::t_0ac9b1f2776e3f 499-501,666-671,740-741,749-750,799,808-809,832-833,837-838
+python/tests/test_research_roles.py
+  s_f2dac664fbf228::t_b9752ff473b3a2 250,252,259,318-322,422-428,444-445
+  s_f2dac664fbf228::t_a23e1b20970b3c 238-244
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "c8455f0cf75f46fe877d3eaa929e67638009b33a",
+  "prompts": {},
+  "sessions": {
+    "s_f2dac664fbf228": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a021d8-8cd4-7b32-b657-4589ee3185b0",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Raul Montoya Cardenas <montoyaraul34@gmail.com>"
+    }
+  }
+}
