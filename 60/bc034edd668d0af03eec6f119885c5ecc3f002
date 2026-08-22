@@ -1,0 +1,20 @@
+python/src/worktrees_hives/research_roles.py
+  s_f2dac664fbf228::t_2b9ab8b0c0f5f3 351
+  s_f2dac664fbf228::t_52fa9ca33b9193 352,354
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "60bc034edd668d0af03eec6f119885c5ecc3f002",
+  "prompts": {},
+  "sessions": {
+    "s_f2dac664fbf228": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a021d8-8cd4-7b32-b657-4589ee3185b0",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Raul Montoya Cardenas <montoyaraul34@gmail.com>"
+    }
+  }
+}
