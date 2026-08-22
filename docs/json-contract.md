@@ -381,6 +381,68 @@ The complete, validating
 fixture models a cloud coding-agent experiment; it does not model local GPU
 conditions.
 
+## Research role domain document
+
+Research Hive occupant roles are versioned Python domain documents. They
+reuse this envelope rather than defining another transport protocol. A lab
+command that carries a role contract places it at `data.research_role`.
+Runtime binding of that contract to a model, provider, and agent identity
+places provenance at `data.role_binding`. The following abbreviated shape
+illustrates nesting only; `<command>` is a placeholder, and the shortened
+objects are not a valid standalone fixture:
+
+```json
+{
+  "ok": true,
+  "schema_version": 1,
+  "command": "lab.<command>",
+  "data": {
+    "research_role": {
+      "schema_version": 1,
+      "role_id": "verification_agent",
+      "capabilities": {
+        "read_repository": true,
+        "read_results": true,
+        "execute_tests": true,
+        "modify_code": false,
+        "launch_experiments": false
+      }
+    },
+    "role_binding": {
+      "schema_version": 1,
+      "role_id": "verification_agent",
+      "model_id": "grok-4.6",
+      "provider": "xai",
+      "agent_id": "verifier-1"
+    }
+  },
+  "error": null
+}
+```
+
+The outer `schema_version` belongs to the Python/Rust transport envelope. The
+nested `data.research_role.schema_version` belongs only to the research role
+document. The two versions evolve independently. GitHub #93 defines the nested
+document and binding metadata and does not add or change a CLI command.
+
+A role declares five capabilities: `read_repository`, `read_results`,
+`execute_tests`, `modify_code`, and `launch_experiments`. Omitted capability
+keys are treated as `false`. The built-in v0 catalog defines four role ids:
+`research_coordinator`, `experiment_agent`, `verification_agent`, and
+`artifact_agent`.
+
+Capability enforcement is a Python policy gate, not a CLI command. Future
+research orchestration (GitHub #94 and #95) must call
+`assert_role_command_allowed` before granting a role a command. That function
+always calls `assert_command_allowed` first. Rust remains authoritative for
+actual `git` and `gh` execution.
+
+The complete role field matrix and explicit non-goals are recorded in
+[`2026-08-18-research-roles-design.md`](superpowers/specs/2026-08-18-research-roles-design.md).
+The complete, validating
+[`research-roles-v0.json`](examples/research-roles-v0.json)
+fixture models the four built-in v0 roles.
+
 ## Compatibility Policy
 
 - **Additive changes** (new optional fields in `data`, new commands) are compatible within v1.
@@ -400,6 +462,7 @@ Example JSON files for testing are located in `docs/examples/`:
 - `git-run.json`
 - `error-policy.json`
 - `research-contract-cloud-agent.json`
+- `research-roles-v0.json`
 
 ## Python Validation
 

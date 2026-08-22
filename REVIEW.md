@@ -41,6 +41,7 @@ For stacked pull requests, review and fix the bottom PR before its children. Re-
 - [ ] Cross-platform path and process behavior does not assume a Linux-only environment.
 - [ ] New behavior has focused tests, including negative policy tests where relevant.
 - [ ] Documentation and examples match the implemented command surface.
+- [ ] Documentation command blocks preserve their caller's working directory when steps run sequentially.
 
 ## Language-specific review notes
 
@@ -76,6 +77,7 @@ Python owns orchestration policy. Reviewers should check:
 - `WH_BIN` and `PATH` lookup failures produce a clear `WhNotFoundError`.
 - Exit code 2 and structured policy errors become `PolicyError`, preserving the Rust error code.
 - Subprocess calls use argument arrays, bounded execution, captured output, and no shell interpolation.
+- Command capability classification consumes wrapper-option operands; rejects wrapper environment assignments, ambiguous clusters, and executable read-only Git options (including accepted long-option abbreviations); recognizes console, windowed, and versioned Python launchers plus test-package `.__main__` aliases; and fails closed on unsupported wrapper escapes. Shell executors do not collapse nested test or experiment requirements.
 - Discovery applies the owner allowlist before scheduling work.
 - Stacks are ordered bottom-up and children are deferred while their base is blocked.
 - The three-code-fix-commit budget is per PR per cycle; review replies do not consume it.

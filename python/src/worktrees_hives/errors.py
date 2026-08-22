@@ -68,6 +68,26 @@ class ResearchValidationError(WhError):
         super().__init__(f"Invalid research contract: {detail}")
 
 
+class ResearchRoleValidationError(WhError):
+    """Raised when a Research Hive role document is invalid."""
+
+    def __init__(self, detail: str) -> None:
+        self.detail = detail
+        super().__init__(f"Invalid research role: {detail}")
+
+
+class RoleCapabilityError(PolicyError):
+    """Raised when a research role is denied a capability or command."""
+
+    def __init__(self, role_id: str, capability: str) -> None:
+        self.role_id = role_id
+        self.capability = capability
+        super().__init__(
+            "ROLE_CAPABILITY_DENIED",
+            f"role {role_id!r} is not allowed to {capability}",
+        )
+
+
 class AggregateValidationError(WhError):
     """Raised when an aggregate discoveries report (JSON and/or Markdown) is invalid."""
 

@@ -1,0 +1,97 @@
+{
+  "schema_version": 1,
+  "roles": [
+    {
+      "schema_version": 1,
+      "role_id": "research_coordinator",
+      "capabilities": {
+        "read_repository": true,
+        "read_results": true,
+        "execute_tests": false,
+        "modify_code": false,
+        "launch_experiments": false
+      },
+      "inputs": [
+        "question",
+        "research_contract"
+      ],
+      "outputs": [
+        "experiment_plan.json"
+      ],
+      "constraints": {
+        "must_be_independent_of": []
+      }
+    },
+    {
+      "schema_version": 1,
+      "role_id": "experiment_agent",
+      "capabilities": {
+        "read_repository": true,
+        "read_results": true,
+        "execute_tests": true,
+        "modify_code": true,
+        "launch_experiments": true
+      },
+      "inputs": [
+        "research_contract",
+        "experiment_plan"
+      ],
+      "outputs": [
+        "result_artifacts",
+        "findings.json",
+        "findings.md"
+      ],
+      "constraints": {
+        "must_be_independent_of": []
+      }
+    },
+    {
+      "schema_version": 1,
+      "role_id": "verification_agent",
+      "capabilities": {
+        "read_repository": true,
+        "read_results": true,
+        "execute_tests": true,
+        "modify_code": false,
+        "launch_experiments": false
+      },
+      "inputs": [
+        "hypothesis",
+        "experiment_manifest",
+        "result_artifacts"
+      ],
+      "outputs": [
+        "findings.json",
+        "verification.md"
+      ],
+      "constraints": {
+        "must_be_independent_of": [
+          "experiment_author"
+        ]
+      }
+    },
+    {
+      "schema_version": 1,
+      "role_id": "artifact_agent",
+      "capabilities": {
+        "read_repository": true,
+        "read_results": true,
+        "execute_tests": false,
+        "modify_code": false,
+        "launch_experiments": false
+      },
+      "inputs": [
+        "research_contract",
+        "result_artifacts",
+        "verification.md"
+      ],
+      "outputs": [
+        "artifact_bundle",
+        "provenance.json"
+      ],
+      "constraints": {
+        "must_be_independent_of": []
+      }
+    }
+  ]
+}
