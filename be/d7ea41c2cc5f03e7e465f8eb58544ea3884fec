@@ -1,0 +1,36 @@
+CLAUDE.md
+  s_f2dac664fbf228::t_ae27c219793213 68-71
+python/tests/test_research_roles.py
+  s_f2dac664fbf228::t_a5f43666a234bc 689-691,695-701
+  s_f2dac664fbf228::t_454f694250f19e 624-627,630-632,640-642,648,655-658,661-662,667
+  s_f2dac664fbf228::t_2b0bd142198f83 688
+  s_f2dac664fbf228::t_d56d75aaf9f743 323-349,465-476,489-493,497-499,551-552,591-600,603,608-620,622,633,643-647,649-654,663-666,668-676,687
+  s_f2dac664fbf228::t_0532c6c9b2081f 494-496,553,583,607,621,635,684
+  s_f2dac664fbf228::t_f4189bb7f9b45f 604-606
+python/src/worktrees_hives/research_roles.py
+  s_f2dac664fbf228::t_3685304b93d2d5 473,480,594-595,687,799-813,895-898
+  s_f2dac664fbf228::t_cb6730e1434622 474-479,481,585-587,596-597,688,692,701-722,732-750,827,849-854,867,874,881-894,899-900
+AGENTS.md
+  s_f2dac664fbf228::t_ae27c219793213 242
+REVIEW.md
+  s_f2dac664fbf228::t_5fed074197355e 80
+docs/superpowers/plans/2026-08-18-research-roles.md
+  s_f2dac664fbf228::t_ae27c219793213 487-495,531
+  s_f2dac664fbf228::t_5fed074197355e 530,537
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "bed7ea41c2cc5f03e7e465f8eb58544ea3884fec",
+  "prompts": {},
+  "sessions": {
+    "s_f2dac664fbf228": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a021d8-8cd4-7b32-b657-4589ee3185b0",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Raul Montoya Cardenas <montoyaraul34@gmail.com>"
+    }
+  }
+}
