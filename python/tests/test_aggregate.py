@@ -247,10 +247,10 @@ class TestAggregateMarkdown:
         assert "H\\|X" in md
         validate_aggregate_markdown(md)
 
-    def test_pipe_in_findings_path_is_encoded_in_link(self, tmp_path: Path) -> None:
-        unit = collect_unit("H-1", tmp_path / "a|b" / "f.json", tmp_path / "a|b" / "f.md")
+    def test_pipe_in_findings_path_is_encoded_in_link(self) -> None:
+        unit = collect_unit("H-1", "a|b.json", "a|b.md")
         md = AggregateReport(units=(unit,)).to_markdown()
-        assert f"[findings.md]({_link_dest(unit.findings_md)})" in md
+        assert "[findings.md](<a%7Cb.md>)" in md
 
     def test_backslash_in_findings_path_is_encoded_in_link(self) -> None:
         unit = collect_unit("H-1", "runs\\a.json", "runs\\a.md")
