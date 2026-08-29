@@ -14,6 +14,7 @@ from worktrees_hives.aggregate import (
     AggregateReport,
     AggregateUnit,
     UnitOutcome,
+    _link_dest,
     collect_unit,
     parse_aggregate_json,
     validate_aggregate_markdown,
@@ -207,7 +208,7 @@ class TestAggregateMarkdown:
         report = self._mixed_report(tmp_path)
         md = report.to_markdown()
         for unit in report.units:
-            assert f"[findings.md](<{unit.findings_md}>)" in md
+            assert f"[findings.md]({_link_dest(unit.findings_md)})" in md
 
     def test_missing_report_shows_as_failure(self, tmp_path: Path) -> None:
         md = self._mixed_report(tmp_path).to_markdown()
@@ -249,7 +250,7 @@ class TestAggregateMarkdown:
     def test_pipe_in_findings_path_is_encoded_in_link(self, tmp_path: Path) -> None:
         unit = collect_unit("H-1", tmp_path / "a|b" / "f.json", tmp_path / "a|b" / "f.md")
         md = AggregateReport(units=(unit,)).to_markdown()
-        assert f"[findings.md](<{tmp_path}/a%7Cb/f.md>)" in md
+        assert f"[findings.md]({_link_dest(unit.findings_md)})" in md
 
     def test_backslash_in_findings_path_is_encoded_in_link(self) -> None:
         unit = collect_unit("H-1", "runs\\a.json", "runs\\a.md")
