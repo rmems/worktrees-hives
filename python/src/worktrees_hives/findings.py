@@ -34,7 +34,7 @@ REQUIRED_MD_SECTIONS: tuple[str, ...] = (
 )
 
 _HEADING_RE = re.compile(r"^ {0,3}(#{1,6})\s+(.+?)\s*$", re.MULTILINE)
-_FENCE_RE = re.compile(r"^ {0,3}(```|~~~)", re.MULTILINE)
+_FENCE_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})", re.MULTILINE)
 
 
 class FindingType(StrEnum):
@@ -379,12 +379,16 @@ def _extract_headings_outside_code_blocks(text: str) -> set[str]:
     while i < len(fences):
         start_fence = fences[i]
         start_pos = start_fence.start()
-        fence_type = start_fence.group(1)[:3]  # ``` or ~~~
+        fence_type = start_fence.group(1)[0]
+        fence_length = len(start_fence.group(1))
 
         # Find matching closing fence
         j = i + 1
         while j < len(fences):
-            if fences[j].group(1)[:3] == fence_type:
+            if (
+                fences[j].group(1)[0] == fence_type
+                and len(fences[j].group(1)) >= fence_length
+            ):
                 end_pos = fences[j].end()
                 code_block_ranges.append((start_pos, end_pos))
                 i = j + 1

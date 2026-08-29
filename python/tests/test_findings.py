@@ -210,6 +210,19 @@ class TestFindingsMarkdown:
         with pytest.raises(FindingsValidationError, match="missing required sections"):
             validate_findings_markdown(md)
 
+    def test_closing_fence_cannot_be_shorter_than_opening_fence(self) -> None:
+        """A shorter fence must not close a longer fenced code block."""
+        md = (
+            "# Hypothesis\n\ntest\n\n"
+            "# Method\n\ntest\n\n"
+            "````\nnot a section\n```\n# Discoveries\n````\n\n"
+            "# Errors\n\ntest\n\n"
+            "# Evidence\n\ntest\n\n"
+            "# Attribution\n\ntest\n"
+        )
+        with pytest.raises(FindingsValidationError, match="missing required sections"):
+            validate_findings_markdown(md)
+
     def test_headings_with_trailing_hashes(self) -> None:
         """ATX headings with optional closing hashes should be recognized."""
         md = (
