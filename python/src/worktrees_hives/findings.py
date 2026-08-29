@@ -33,8 +33,8 @@ REQUIRED_MD_SECTIONS: tuple[str, ...] = (
     "Attribution",
 )
 
-_HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$", re.MULTILINE)
-_FENCE_RE = re.compile(r"^(```|~~~)", re.MULTILINE)
+_HEADING_RE = re.compile(r"^ {0,3}(#{1,6})\s+(.+?)\s*$", re.MULTILINE)
+_FENCE_RE = re.compile(r"^ {0,3}(```|~~~)", re.MULTILINE)
 
 
 class FindingType(StrEnum):

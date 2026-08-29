@@ -196,6 +196,20 @@ class TestFindingsMarkdown:
         with pytest.raises(FindingsValidationError, match="missing required sections"):
             validate_findings_markdown(md)
 
+    @pytest.mark.parametrize("indent", [" ", "  ", "   "])
+    def test_ignores_headings_in_indented_fenced_code_blocks(self, indent: str) -> None:
+        """CommonMark permits up to three spaces before a fenced code block."""
+        md = (
+            "# Hypothesis\n\ntest\n\n"
+            "# Method\n\ntest\n\n"
+            f"{indent}```\n{indent}# Discoveries\n{indent}# Null results\n{indent}```\n\n"
+            "# Errors\n\ntest\n\n"
+            "# Evidence\n\ntest\n\n"
+            "# Attribution\n\ntest\n"
+        )
+        with pytest.raises(FindingsValidationError, match="missing required sections"):
+            validate_findings_markdown(md)
+
     def test_headings_with_trailing_hashes(self) -> None:
         """ATX headings with optional closing hashes should be recognized."""
         md = (
