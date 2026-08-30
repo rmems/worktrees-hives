@@ -12,6 +12,8 @@ on:
       - "python/**"
       - "pyproject.toml"
       - ".github/workflows/python.yml"
+      - "crates/**"
+      - ".github/workflows/rust.yml"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -121,14 +123,13 @@ jobs:
           WH_BIN: ${{ needs.check-python-pkg.outputs.has-cargo == 'true' && format('{0}/target/release/wh', github.workspace) || '' }}
         run: python -m pytest python/tests/ -v --tb=short
 
-  # macOS/Windows: billable minutes — push to main only (not pull_request).
+  # macOS/Windows + Python tests on pull requests (required for PR coverage parity).
   test-main-platforms:
     name: test (${{ matrix.os }}, Python ${{ matrix.python-version }})
     needs: [check-python-pkg, lint]
     if: >-
       needs.check-python-pkg.outputs.exists == 'true' &&
-      github.event_name == 'push' &&
-      github.ref == 'refs/heads/main'
+      github.event_name == 'pull_request'
     strategy:
       fail-fast: false
       matrix:

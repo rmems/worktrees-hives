@@ -33,8 +33,15 @@ REQUIRED_MD_SECTIONS: tuple[str, ...] = (
     "Attribution",
 )
 
-_HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$", re.MULTILINE)
-_FENCE_RE = re.compile(r"^(```|~~~)", re.MULTILINE)
+_HEADING_RE = re.compile(
+    r"^ {0,3}(#{1,6})[ \t]+([^\r\n]+?)[ \t]*(?:\r?$)",
+    re.MULTILINE,
+)
+_FENCE_RE = re.compile(
+    r"^ {0,3}(?:(?:[-+*])[ \t]{1,4})?(?P<marker>`{3,}|~{3,})"
+    r"(?P<suffix>[^\r\n]*)(?:\r?$)",
+    re.MULTILINE,
+)
 
 
 class FindingType(StrEnum):
@@ -371,7 +378,7 @@ def _require_nonempty_str(raw: dict[str, Any], key: str) -> str:
 def extract_headings_outside_code_blocks(text: str) -> set[str]:
     """Extract normalized ATX headings, ignoring those inside fenced code blocks."""
     # Find all fence positions
-    fences = list(_FENCE_RE.finditer(text))
+    fences = [match for match in _FENCE_RE.finditer(text) if _is_valid_fence(match)]
     code_block_ranges: list[tuple[int, int]] = []
 
     # Pair up fences to find code block ranges
@@ -379,12 +386,13 @@ def extract_headings_outside_code_blocks(text: str) -> set[str]:
     while i < len(fences):
         start_fence = fences[i]
         start_pos = start_fence.start()
-        fence_type = start_fence.group(1)[:3]  # ``` or ~~~
+        fence_type = start_fence.group("marker")[0]
+        fence_length = len(start_fence.group("marker"))
 
         # Find matching closing fence
         j = i + 1
         while j < len(fences):
-            if fences[j].group(1)[:3] == fence_type:
+            if _is_matching_closing_fence(fences[j], fence_type, fence_length):
                 end_pos = fences[j].end()
                 code_block_ranges.append((start_pos, end_pos))
                 i = j + 1
@@ -403,10 +411,30 @@ def extract_headings_outside_code_blocks(text: str) -> set[str]:
         if not _is_in_code_block(match.start()):
             heading_text = match.group(2)
             # Strip optional trailing hashes (ATX closing sequence)
-            heading_text = re.sub(r"\s*#+\s*$", "", heading_text)
+            heading_text = re.sub(r"[ \t]+#+[ \t]*$", "", heading_text)
             headings.add(normalize_heading(heading_text))
 
     return headings
+
+
+def _is_matching_closing_fence(
+    candidate: re.Match[str],
+    fence_type: str,
+    fence_length: int,
+) -> bool:
+    """Return whether a fence candidate closes the opening fence."""
+    if candidate.group("marker")[0] != fence_type:
+        return False
+    if len(candidate.group("marker")) < fence_length:
+        return False
+    return not candidate.group("suffix").strip(" \t")
+
+
+def _is_valid_fence(match: re.Match[str]) -> bool:
+    """Return whether a fence candidate has a valid opening info string."""
+    suffix = match.group("suffix")
+    marker = match.group("marker")
+    return marker[0] == "~" or "`" not in suffix
 
 
 def normalize_heading(text: str) -> str:

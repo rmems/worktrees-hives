@@ -196,6 +196,78 @@ class TestFindingsMarkdown:
         with pytest.raises(FindingsValidationError, match="missing required sections"):
             validate_findings_markdown(md)
 
+    @pytest.mark.parametrize("indent", [" ", "  ", "   "])
+    def test_ignores_headings_in_indented_fenced_code_blocks(self, indent: str) -> None:
+        """CommonMark permits up to three spaces before a fenced code block."""
+        md = (
+            "# Hypothesis\n\ntest\n\n"
+            "# Method\n\ntest\n\n"
+            f"{indent}```\n{indent}# Discoveries\n{indent}# Null results\n{indent}```\n\n"
+            "# Errors\n\ntest\n\n"
+            "# Evidence\n\ntest\n\n"
+            "# Attribution\n\ntest\n"
+        )
+        with pytest.raises(FindingsValidationError, match="missing required sections"):
+            validate_findings_markdown(md)
+
+    def test_closing_fence_cannot_be_shorter_than_opening_fence(self) -> None:
+        """A shorter fence must not close a longer fenced code block."""
+        md = (
+            "# Hypothesis\n\ntest\n\n"
+            "# Method\n\ntest\n\n"
+            "````\nnot a section\n```\n# Discoveries\n````\n\n"
+            "# Errors\n\ntest\n\n"
+            "# Evidence\n\ntest\n\n"
+            "# Attribution\n\ntest\n"
+        )
+        with pytest.raises(FindingsValidationError, match="missing required sections"):
+            validate_findings_markdown(md)
+
+    def test_fence_with_info_string_cannot_close_code_block(self) -> None:
+        """A closing fence may contain only spaces or tabs after its marker."""
+        md = (
+            "# Hypothesis\n\ntest\n\n"
+            "```text\n   ```python\n# Discoveries\n```\n\n"
+            "# Method\n\ntest\n\n"
+            "# Errors\n\ntest\n\n"
+            "# Evidence\n\ntest\n\n"
+            "# Attribution\n\ntest\n"
+        )
+        with pytest.raises(FindingsValidationError, match="missing required sections"):
+            validate_findings_markdown(md)
+
+    def test_heading_separator_cannot_cross_lines(self) -> None:
+        """An ATX heading marker and its text must be on the same line."""
+        md = " #\nDiscoveries\n" + empty_findings_markdown_template().replace("# Discoveries\n", "")
+        with pytest.raises(FindingsValidationError, match="missing required sections"):
+            validate_findings_markdown(md)
+
+    def test_ignores_headings_in_list_item_fenced_code_blocks(self) -> None:
+        """Fenced code blocks directly nested in list items still hide headings."""
+        md = (
+            "# Hypothesis\n\ntest\n\n"
+            "# Method\n\ntest\n\n"
+            "- ```text\n  # Discoveries\n  # Null results\n  ```\n\n"
+            "# Errors\n\ntest\n\n"
+            "# Evidence\n\ntest\n\n"
+            "# Attribution\n\ntest\n"
+        )
+        with pytest.raises(FindingsValidationError, match="missing required sections"):
+            validate_findings_markdown(md)
+
+    def test_backtick_in_info_string_is_not_a_fence(self) -> None:
+        """Backtick fence info strings cannot contain backticks."""
+        md = empty_findings_markdown_template().replace(
+            "# Discoveries\n", "   ```bad`info\n# Discoveries\n"
+        )
+        validate_findings_markdown(md)
+
+    def test_trailing_hashes_need_whitespace_separator(self) -> None:
+        """Unseparated trailing hashes remain part of an ATX heading's text."""
+        md = empty_findings_markdown_template().replace("# Discoveries\n", "# Discoveries###\n")
+        with pytest.raises(FindingsValidationError, match="missing required sections"):
+            validate_findings_markdown(md)
+
     def test_headings_with_trailing_hashes(self) -> None:
         """ATX headings with optional closing hashes should be recognized."""
         md = (

@@ -53,12 +53,11 @@ jobs:
       - name: Run tests
         run: cargo test --workspace
 
-  # macOS/Windows burn billable minutes — only on push to main (not PRs).
+  # macOS/Windows burn billable minutes — run on PRs and pushes for parity.
   # Do not use matrix in job-level `if` (invalid / workflow fails immediately).
   test-main-platforms:
     name: test (${{ matrix.os }})
     needs: quality
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     strategy:
       fail-fast: false
       matrix:
