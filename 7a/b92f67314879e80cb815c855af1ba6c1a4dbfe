@@ -1,0 +1,68 @@
+python/src/worktrees_hives/claim.py
+  s_e0ddcae50d1b47::t_03d914cef7f0c0 28-33,52,90-91,141,152,163,197-199,210,261-262,277-282,290,355-361
+crates/wh-core/src/worktree.rs
+  s_e0ddcae50d1b47::t_5a82ab4f0b0509 5-7,149-150,158-159,488,498,1050-1052
+  s_e0ddcae50d1b47::t_0c6af1bb7501de 162-163,420,440,455,484,487,489-497,529,538-542,544-546,554,967-971,1047-1049,1053-1055
+  s_e0ddcae50d1b47::t_b223f405b6cba1 934,981,987
+  s_e0ddcae50d1b47::t_5f9f0a7bb40219 151-157,863-906,980
+  s_e0ddcae50d1b47::t_7c254a2b54f326 21-22,128-130,136-137,140,164,170,229,403-412,424-432,444-447,459-463,473,475-476,501,504-505,507,510-511,514,517-518,520-527,536-537,543,547-552
+  s_e0ddcae50d1b47::t_6ec24e9bcc2cc7 469
+  s_e0ddcae50d1b47::t_e759a1cc8f15bf 1060-1072
+  s_e0ddcae50d1b47::t_079bc6495c82a7 343-355,413-419,421-423,433-439,441-443,448-454,456-458,464-468,470-472,474,477-483,485-486
+  s_e0ddcae50d1b47::t_c6fa800fc0750f 148,528,530-535,553,555-558
+  s_e0ddcae50d1b47::t_5a39add3118752 942-966,972-979,982-986,988-990,1024,1056-1059
+python/src/worktrees_hives/lab_jobs.py
+  s_e0ddcae50d1b47::t_90cf632faefef1 44-50,129-130,160-167,180,491-494,534,543,602,617-622,629
+python/src/worktrees_hives/contract.py
+  s_e0ddcae50d1b47::t_206adbfe69b8c4 5,12-15,27-42,44-53,60,66,68-69
+  s_e0ddcae50d1b47::t_f34cc6d146bf18 43,61-65,67
+  s_e0ddcae50d1b47::t_1ea067c28100a8 16-26,54-59
+python/tests/test_issue_to_pr.py
+  s_e0ddcae50d1b47::t_97afe6d665a2af 291-298
+  s_e0ddcae50d1b47::t_d1dcc8a3ad5fbe 24-25,66-76,81,181,259-290,299-301
+python/tests/test_lab_run.py
+  s_e0ddcae50d1b47::t_e158c105f87229 343-344,348,387
+docs/json-contract.md
+  s_e0ddcae50d1b47::t_d9901f487d278e 61-66
+  s_e0ddcae50d1b47::t_cc2803246c3267 7,50-59,112-113,119-123
+python/src/worktrees_hives/issue_to_pr.py
+  s_e0ddcae50d1b47::t_02ad8ed95649b0 28-32,134,219-222,249,258,263,292-300,304
+python/tests/test_claim.py
+  s_e0ddcae50d1b47::t_eaaff91d364e00 30,34-37,41-47,157,196,202,204,214-250
+docs/examples/worktree-create.json
+  s_e0ddcae50d1b47::t_cc2803246c3267 9-10
+crates/wh/src/main.rs
+  s_e0ddcae50d1b47::t_cc2803246c3267 602
+  s_e0ddcae50d1b47::t_fbf2a8ed4ca0c5 157-158,166-167,175-178,188-189,199
+  s_e0ddcae50d1b47::t_7397258bdc5306 133-146,159-165,179-187
+  s_e0ddcae50d1b47::t_48d655addee887 127-128,147,149-154,205-213,245
+  s_e0ddcae50d1b47::t_9be6ee72f5d6d5 155-156,168-174,190-198,201-204,632-635
+python/tests/test_lab_jobs.py
+  s_e0ddcae50d1b47::t_97afe6d665a2af 110-126,206-208,210-218
+  s_e0ddcae50d1b47::t_bd7d6800d02269 31,37-38,42-48,108,159,166-181,183-195,197-205,219-231
+  s_e0ddcae50d1b47::t_88551a45b51b26 182,196,209
+crates/wh-core/src/error.rs
+  s_e0ddcae50d1b47::t_ecf7d88820202d 56,143,156-159,164-172,175-183
+  s_e0ddcae50d1b47::t_c6fa800fc0750f 54,141-142,144-147,150-155,184-186
+  s_e0ddcae50d1b47::t_48d655addee887 205-213,216-223,225-229
+  s_e0ddcae50d1b47::t_bf3490c3f37db0 10-35,55,57,139-140,148-149,160-163,173-174,187-188,214-215,224
+crates/wh/tests/worktree_cli.rs
+  s_e0ddcae50d1b47::t_f8e3d45366d0d2 1-12,15-109,111-124,126-131,161
+  s_e0ddcae50d1b47::t_c96a640df02623 13-14,110,125,132-160
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "7ab92f67314879e80cb815c855af1ba6c1a4dbfe",
+  "prompts": {},
+  "sessions": {
+    "s_e0ddcae50d1b47": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a053e6-8b19-72e1-8ba0-3db3010382a7",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Raul Montoya Cardenas <montoyaraul34@gmail.com>"
+    }
+  }
+}

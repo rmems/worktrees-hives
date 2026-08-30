@@ -1,0 +1,21 @@
+AGENTS.md
+  s_e0ddcae50d1b47::t_becafbdb5c8a64 60-71,88-89,92,132-134,140
+CLAUDE.md
+  s_e0ddcae50d1b47::t_becafbdb5c8a64 21-23,29,36-46
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "b1d53ab366b60da0e7da7573c6fb910fa0aeb54e",
+  "prompts": {},
+  "sessions": {
+    "s_e0ddcae50d1b47": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a053e6-8b19-72e1-8ba0-3db3010382a7",
+        "model": "gpt-5.6-terra"
+      },
+      "human_author": "Raul Montoya Cardenas <montoyaraul34@gmail.com>"
+    }
+  }
+}
