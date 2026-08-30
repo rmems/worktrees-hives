@@ -1,0 +1,21 @@
+.github/workflows/rust.yml
+  s_3090519602b094::t_53fd877f2775cf 56
+.github/workflows/python.yml
+  s_3090519602b094::t_f6061d9bdd8236 15-16,126,132
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "19360fcf28f5c10542b762b01292577666330b49",
+  "prompts": {},
+  "sessions": {
+    "s_3090519602b094": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0526d-c697-7513-9053-4e7cd0af8231",
+        "model": "gpt-5.3-codex-spark"
+      },
+      "human_author": "Raul Montoya Cardenas <montoyaraul34@gmail.com>"
+    }
+  }
+}
