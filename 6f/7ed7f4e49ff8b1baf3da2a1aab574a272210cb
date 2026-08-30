@@ -1,0 +1,19 @@
+python/tests/test_aggregate.py
+  s_3090519602b094::t_f12e34d50da98e 244,252
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "6f7ed7f4e49ff8b1baf3da2a1aab574a272210cb",
+  "prompts": {},
+  "sessions": {
+    "s_3090519602b094": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0526d-c697-7513-9053-4e7cd0af8231",
+        "model": "gpt-5.3-codex-spark"
+      },
+      "human_author": "Raul Montoya Cardenas <montoyaraul34@gmail.com>"
+    }
+  }
+}
