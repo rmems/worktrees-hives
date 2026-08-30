@@ -18,41 +18,32 @@ bd close <id>         # Complete work
 
 ### Rules
 
-- Use `bd` for ALL task tracking — do NOT use TodoWrite, TaskCreate, or markdown TODO lists
-- Run `bd prime` for detailed command reference and session close protocol
-- Use `bd remember` for persistent knowledge — do NOT use MEMORY.md files
+- Use `bd` as the lightweight canonical task state: one task per cohesive tranche, claimed before code. Do not substitute TodoWrite, TaskCreate, or markdown TODO lists.
+- Run `bd prime` for command reference when needed. Acceptance text, Linear sync, GitHub child issues, project metadata, and audit reports may follow implementation but must be complete by PR handoff.
+- Use `bd remember` for persistent knowledge — do NOT use MEMORY.md files.
 
 **Architecture in one line:** issues live in a local Dolt DB; sync uses `refs/dolt/data` on your git remote; `.beads/issues.jsonl` is a passive export. See https://github.com/gastownhall/beads/blob/main/docs/SYNC_CONCEPTS.md for details and anti-patterns.
 
 ## Session Completion
 
-**When ending a work session**, you MUST complete ALL steps below. Work is NOT complete until `git push` succeeds.
-
-**MANDATORY WORKFLOW:**
-
-1. **File issues for remaining work** - Create issues for anything that needs follow-up
-2. **Run quality gates** (if code changed) - Tests, linters, builds
-3. **Update issue status** - Close finished work, update in-progress items
-4. **PUSH TO REMOTE** - This is MANDATORY:
-   ```bash
-   git pull --rebase
-   git push
-   git status  # MUST show "up to date with origin"
-   ```
-5. **Clean up** - Clear stashes, prune remote branches
-6. **Verify** - All changes committed AND pushed
-7. **Hand off** - Provide context for next session
-
-**CRITICAL RULES:**
-- Work is NOT complete until `git push` succeeds
-- NEVER stop before pushing - that leaves work stranded locally
-- NEVER say "ready to push when you are" - YOU must push
-- If push fails, resolve and retry until it succeeds
+For authorized implementation, complete the cohesive tranche: run focused gates during work and the full native gates once before push; commit, push, and create or update the PR for handoff. Record remaining follow-up in Beads and complete required tracking and metadata by PR handoff. Do not add redundant full-suite runs, serial audits, or cleanup that is unrelated to the tranche. A specific user instruction that withholds a push or PR action controls that action. Merge is always a separate, explicitly authorized operation.
 <!-- END BEADS INTEGRATION -->
 
 ## Commit attribution
 
 Every Codex-authored commit must include the exact trailers `Agent: Codex` and `Co-authored-by: Codex <noreply@openai.com>`. Never rewrite a Cursor-authored or Cursor-co-authored commit merely to change attribution; add a new correctly attributed commit instead.
+
+## Team-maintainer fast path
+
+An explicit user request to implement scoped work authorizes the assigned team maintainer to create the scoped branch/worktree, edit code, commit, make the first push, and create the PR without repeated confirmation. That authority never authorizes a merge, auto-merge, merge queue, destructive action, or work outside the assigned scope; Rust remains the hard enforcement boundary.
+
+- **Beads:** Use Beads as lightweight canonical state: one task per cohesive tranche and claim it before coding. Complete acceptance prose, Linear sync, GitHub child issues, project metadata, and audit reports may follow implementation, but must be complete by PR handoff rather than blocking the first edit.
+- **Isolation and alignment:** A dirty or stale primary checkout is not a blocker. Preserve it, bootstrap a clean source/clone and use `wh` for the assigned worktree. A newly created, unpublished assigned branch may be fast-forwarded or rebased to the verified remote base before edits.
+- **Parallel work:** Subagents may work in declared disjoint paths or separate worktrees. One controller owns any shared index, commit, and push; overlapping writes are forbidden.
+- **Review and validation:** After the first tested implementation, default to one independent review matched to the risk. Add reviewers only for named high-risk boundaries or actual findings. Run one baseline, focused gates while working, and the full native gates once before push; do not require serial policy audits before a known-safe code path or duplicate full-suite runs from every subagent.
+- **Routine remediation:** Automatically fix safe mechanical findings within scope. Stop only for a genuine ownership collision, a destructive or out-of-scope action, an unresolved Critical/Important correctness issue, or a material user design decision.
+- **GitHub access:** GitHub MCP remains preferred; when it is unavailable, use `gh` immediately rather than waiting for connector retries.
+- **Handoff:** In the team-maintainer profile, commit, push, and PR handoff are expected outcomes of authorized implementation. Merge remains separately and explicitly authorized under the protocol above.
 
 ## Human-authorized merges
 
