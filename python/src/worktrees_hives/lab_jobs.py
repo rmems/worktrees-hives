@@ -460,6 +460,7 @@ class LabJobManager:
         *,
         owner: str,
         repo: str,
+        start_point: str,
         hypothesis_id: str,
         agent_id: str,
         role: AgentRole | str,
@@ -469,6 +470,7 @@ class LabJobManager:
         """Create a worktree via ``wh`` and register an allocated lab job."""
         _validate_segment("owner", owner)
         _validate_segment("repo", repo)
+        _validate_ref("start_point", start_point)
         _validate_hypothesis_id(hypothesis_id)
         if not agent_id or not str(agent_id).strip():
             raise LabJobError("agent_id is required")
@@ -508,7 +510,7 @@ class LabJobManager:
         try:
             if Path(worktree_path).exists():
                 raise LabJobExistsError(f"worktree already exists for this job: {worktree_path}")
-            path, ret_branch = self._wh_create(owner, repo, jid, br)
+            path, ret_branch = self._wh_create(owner, repo, jid, br, start_point)
             if ret_branch != br:
                 raise LabJobError(f"wh returned branch {ret_branch!r}, expected {br!r}")
             done = replace(
@@ -568,12 +570,21 @@ class LabJobManager:
                 "LabJobManager(allowed_owners=...)."
             )
 
-    def _wh_create(self, owner: str, repo: str, job_id: str, branch: str) -> tuple[str, str]:
+    def _wh_create(
+        self,
+        owner: str,
+        repo: str,
+        job_id: str,
+        branch: str,
+        start_point: str,
+    ) -> tuple[str, str]:
         resp = self._wh_run(
             "worktree",
             "create",
             "--repo",
             self.repo_root,
+            "--start-point",
+            start_point,
             owner,
             repo,
             job_id,

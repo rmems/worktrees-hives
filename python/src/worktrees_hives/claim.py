@@ -43,7 +43,7 @@ _ALLOWED_OWNERS_ENV = "WH_ALLOWED_OWNERS"
 _SEGMENT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 # Branch / ref: plain git-ish names, no leading dash.
 _REF_RE = re.compile(r"^(?!-)[A-Za-z0-9][A-Za-z0-9._/-]*$")
-# Optional full SHA for PR pin documentation (not passed to create today).
+# Commit id supplied by the caller for an exact PR-head start point.
 _SHA_RE = re.compile(r"^[0-9a-fA-F]{7,40}$")
 
 
@@ -125,12 +125,12 @@ class ClaimManager:
         repo: str,
         issue_number: int,
         *,
-        base_ref: str = "origin/main",
+        base_ref: str,
     ) -> ClaimResult:
         """Claim a GitHub issue: derive branch/job, create worktree via ``wh``."""
         if issue_number <= 0:
             raise ClaimError(f"issue_number must be positive, got {issue_number}")
-        _ = base_ref  # branch tip selection is owned by wh (create from HEAD/existing)
+        _validate_ref("base_ref", base_ref)
         _validate_segment("owner", owner)
         _validate_segment("repo", repo)
         self._assert_owner_allowed(owner)
@@ -141,7 +141,7 @@ class ClaimManager:
         worktree_path = self.derive_path(owner, repo, job_id)
         self._assert_not_exists(worktree_path)
 
-        path, returned_branch = self._wh_create(owner, repo, job_id, branch)
+        path, returned_branch = self._wh_create(owner, repo, job_id, branch, base_ref)
         self._check_isolation(path, returned_branch, branch)
 
         return ClaimResult(
@@ -161,7 +161,7 @@ class ClaimManager:
         pr_number: int,
         *,
         head_branch: str,
-        head_sha: str | None = None,
+        head_sha: str,
         head_repo: str | None = None,
     ) -> ClaimResult:
         """Claim a PR head branch into an isolated worktree via ``wh``."""
@@ -171,7 +171,7 @@ class ClaimManager:
         _validate_segment("repo", repo)
         self._assert_owner_allowed(owner)
         _validate_ref("head_branch", head_branch)
-        if head_sha is not None and not _SHA_RE.fullmatch(head_sha):
+        if not _SHA_RE.fullmatch(head_sha):
             raise ClaimError(f"invalid head_sha shape: {head_sha!r}")
         if head_repo is not None:
             # owner/repo slug for documentation; create still targets base repo root.
@@ -185,7 +185,7 @@ class ClaimManager:
         worktree_path = self.derive_path(owner, repo, job_id)
         self._assert_not_exists(worktree_path)
 
-        path, returned_branch = self._wh_create(owner, repo, job_id, head_branch)
+        path, returned_branch = self._wh_create(owner, repo, job_id, head_branch, head_sha)
         self._check_isolation(path, returned_branch, head_branch)
 
         return ClaimResult(
@@ -239,13 +239,22 @@ class ClaimManager:
     # wh bridge
     # ------------------------------------------------------------------
 
-    def _wh_create(self, owner: str, repo: str, job_id: str, branch: str) -> tuple[str, str]:
+    def _wh_create(
+        self,
+        owner: str,
+        repo: str,
+        job_id: str,
+        branch: str,
+        start_point: str,
+    ) -> tuple[str, str]:
         """Invoke ``wh worktree create --repo …``; return (path, branch)."""
         resp = self._wh_run(
             "worktree",
             "create",
             "--repo",
             self.repo_root,
+            "--start-point",
+            start_point,
             owner,
             repo,
             job_id,

@@ -53,6 +53,8 @@ pub enum PolicyCode {
     GhFlagNotAllowed,
     /// A path is outside the allowed sandbox (e.g. supervised --repo).
     PathNotAllowed,
+    /// An existing worktree branch lacks a durable identity proving safe resume ownership.
+    WorktreeResumeUnproven,
 }
 
 impl PolicyCode {
@@ -68,6 +70,7 @@ impl PolicyCode {
             Self::GhSubcommandNotAllowed => "GH_SUBCOMMAND_NOT_ALLOWED",
             Self::GhFlagNotAllowed => "GH_FLAG_NOT_ALLOWED",
             Self::PathNotAllowed => "PATH_NOT_ALLOWED",
+            Self::WorktreeResumeUnproven => "WORKTREE_RESUME_UNPROVEN",
         }
     }
 }

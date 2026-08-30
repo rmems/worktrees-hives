@@ -290,6 +290,7 @@ def run_lab_unit(
     *,
     owner: str,
     repo: str,
+    start_point: str,
     hypothesis_id: str,
     agent_id: str,
     role: AgentRole | str,
@@ -309,6 +310,8 @@ def run_lab_unit(
         Repository owner passed through to ``manager.allocate``.
     repo:
         Repository name passed through to ``manager.allocate``.
+    start_point:
+        Caller-selected commit or ref passed to the Rust worktree boundary.
     hypothesis_id:
         Hypothesis identifier for this run unit.
     agent_id:
@@ -343,6 +346,7 @@ def run_lab_unit(
     job = manager.allocate(
         owner=owner,
         repo=repo,
+        start_point=start_point,
         hypothesis_id=hypothesis_id,
         agent_id=agent_id,
         role=role,

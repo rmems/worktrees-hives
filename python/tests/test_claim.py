@@ -114,7 +114,7 @@ class TestAllowlist:
     def test_denied_owner(self):
         mgr, wh = _manager(allowed_owners=frozenset({TEST_OWNER}))
         with pytest.raises(ClaimError, match="allowlist"):
-            mgr.claim_issue("other-org", TEST_REPO, 1)
+            mgr.claim_issue("other-org", TEST_REPO, 1, base_ref="origin/main")
         wh.run.assert_not_called()
 
     def test_empty_allowlist_allows_any(self):
@@ -123,7 +123,7 @@ class TestAllowlist:
             path="/tmp/wt-base/other/example-repo/gh-2",
             branch="hive/gh-2",
         )
-        result = mgr.claim_issue("other", TEST_REPO, 2)
+        result = mgr.claim_issue("other", TEST_REPO, 2, base_ref="origin/main")
         assert result.owner == "other"
         wh.run.assert_called()
 
@@ -138,7 +138,7 @@ class TestClaimIssue:
         mgr, wh = _manager()
         path = "/tmp/wt-base/acme/example-repo/gh-8"
         wh.run.return_value = _ok_create(path=path, branch="hive/gh-8")
-        result = mgr.claim_issue(TEST_OWNER, TEST_REPO, 8)
+        result = mgr.claim_issue(TEST_OWNER, TEST_REPO, 8, base_ref="origin/release")
         assert result.branch == "hive/gh-8"
         assert result.job_id == "gh-8"
         assert result.issue_number == 8
@@ -147,12 +147,13 @@ class TestClaimIssue:
         args = wh.run.call_args[0]
         assert args[0:3] == ("worktree", "create", "--repo")
         assert args[3] == os.path.abspath("/tmp/repo")
-        assert args[4:8] == (TEST_OWNER, TEST_REPO, "gh-8", "hive/gh-8")
+        assert args[4:6] == ("--start-point", "origin/release")
+        assert args[6:10] == (TEST_OWNER, TEST_REPO, "gh-8", "hive/gh-8")
 
     def test_rejects_non_positive_issue(self):
         mgr, wh = _manager()
         with pytest.raises(ClaimError, match="issue_number"):
-            mgr.claim_issue(TEST_OWNER, TEST_REPO, 0)
+            mgr.claim_issue(TEST_OWNER, TEST_REPO, 0, base_ref="origin/main")
         wh.run.assert_not_called()
 
     def test_exists_raises_without_wh(self, tmp_path: Path):
@@ -161,14 +162,14 @@ class TestClaimIssue:
         existing.mkdir(parents=True)
         mgr, wh = _manager(worktree_base=str(base))
         with pytest.raises(ClaimExistsError):
-            mgr.claim_issue(TEST_OWNER, TEST_REPO, 1)
+            mgr.claim_issue(TEST_OWNER, TEST_REPO, 1, base_ref="origin/main")
         wh.run.assert_not_called()
 
     def test_branch_mismatch_isolation(self):
         mgr, wh = _manager()
         wh.run.return_value = _ok_create(branch="wrong-branch")
         with pytest.raises(IsolationError, match="expected"):
-            mgr.claim_issue(TEST_OWNER, TEST_REPO, 1)
+            mgr.claim_issue(TEST_OWNER, TEST_REPO, 1, base_ref="origin/main")
 
 
 class TestClaimPr:
@@ -188,6 +189,7 @@ class TestClaimPr:
         assert result.owns_branch is False
         assert result.branch == "feature/pr-head"
         args = wh.run.call_args[0]
+        assert args[4:6] == ("--start-point", "abc1234")
         assert args[-1] == "feature/pr-head"
         assert args[-2] == "pr-9"
 
@@ -208,19 +210,19 @@ class TestWhFailures:
         mgr, wh = _manager()
         wh.run.side_effect = WhBinaryNotFoundError("no wh")
         with pytest.raises(ClaimError, match="wh binary not found"):
-            mgr.claim_issue(TEST_OWNER, TEST_REPO, 1)
+            mgr.claim_issue(TEST_OWNER, TEST_REPO, 1, base_ref="origin/main")
 
     def test_process_error(self):
         mgr, wh = _manager()
         wh.run.side_effect = WhProcessError(returncode=1, stderr="boom")
         with pytest.raises(ClaimError, match="wh exited 1"):
-            mgr.claim_issue(TEST_OWNER, TEST_REPO, 1)
+            mgr.claim_issue(TEST_OWNER, TEST_REPO, 1, base_ref="origin/main")
 
     def test_policy_error(self):
         mgr, wh = _manager()
         wh.run.side_effect = PolicyError("sandbox", "path escape")
         with pytest.raises(ClaimError, match="policy"):
-            mgr.claim_issue(TEST_OWNER, TEST_REPO, 1)
+            mgr.claim_issue(TEST_OWNER, TEST_REPO, 1, base_ref="origin/main")
 
     def test_error_response(self):
         mgr, wh = _manager()
@@ -230,7 +232,7 @@ class TestWhFailures:
             schema_version=1,
         )
         with pytest.raises(ClaimError, match="worktree create failed"):
-            mgr.claim_issue(TEST_OWNER, TEST_REPO, 1)
+            mgr.claim_issue(TEST_OWNER, TEST_REPO, 1, base_ref="origin/main")
 
 
 # ---------------------------------------------------------------------------

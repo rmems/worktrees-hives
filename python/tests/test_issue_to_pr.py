@@ -79,6 +79,7 @@ def _make_config(**overrides) -> IssueToPrConfig:
         "repo": "example-repo",
         "issue_number": 8,
         "base_branch": "main",
+        "start_point": "origin/main",
         "pr_labels": ["python", "orchestrator"],
         "pr_milestone": "B",
     }
@@ -88,11 +89,6 @@ def _make_config(**overrides) -> IssueToPrConfig:
 
 def _ok() -> MagicMock:
     return MagicMock(returncode=0, stdout="", stderr="")
-
-
-def _ensure_branch_ok() -> list[MagicMock]:
-    """rev-parse local base + git branch -f."""
-    return [_ok(), _ok()]
 
 
 def _gh_cmd_from_calls(mock_run) -> list:
@@ -107,9 +103,8 @@ def _gh_cmd_from_calls(mock_run) -> list:
 def _happy_side_effect(
     gh_stdout: str = "https://github.com/acme/example-repo/pull/42\n",
 ) -> list[MagicMock]:
-    """ensure branch + push + gh pr create."""
+    """push + gh pr create."""
     return [
-        *_ensure_branch_ok(),
         _ok(),  # push
         MagicMock(returncode=0, stdout=gh_stdout, stderr=""),
     ]
@@ -123,9 +118,16 @@ def _happy_side_effect(
 class TestIssueToPrConfig:
     """Tests for config dataclass."""
 
-    def test_defaults(self):
-        cfg = IssueToPrConfig(owner="o", repo="r", issue_number=1)
-        assert cfg.base_branch == "main"
+    def test_non_branch_defaults(self):
+        cfg = IssueToPrConfig(
+            owner="o",
+            repo="r",
+            issue_number=1,
+            base_branch="trunk",
+            start_point="origin/trunk",
+        )
+        assert cfg.base_branch == "trunk"
+        assert cfg.start_point == "origin/trunk"
         assert cfg.remote == "origin"
         assert cfg.pr_labels == []
         assert cfg.pr_milestone is None
@@ -226,7 +228,6 @@ class TestIssueToPrStepFailures:
         cfg = _make_config()
         mock_wh = MagicMock()
         mock_wh.run.side_effect = WhProcessError(returncode=2, stderr="bad")
-        mock_run.side_effect = _ensure_branch_ok()
 
         orch = IssueToPr(config=cfg, wh_client=mock_wh)
         with pytest.raises(IssueToPrError, match=r"worktree_created|init"):
@@ -238,7 +239,6 @@ class TestIssueToPrStepFailures:
         cfg = _make_config()
         mock_wh = MagicMock()
         mock_wh.run.return_value = _error_response()
-        mock_run.side_effect = _ensure_branch_ok()
 
         orch = IssueToPr(config=cfg, wh_client=mock_wh)
         with pytest.raises(IssueToPrError, match="wh returned error"):
@@ -252,7 +252,6 @@ class TestIssueToPrStepFailures:
         mock_wh.run.return_value = _success_response()
 
         mock_run.side_effect = [
-            *_ensure_branch_ok(),
             MagicMock(returncode=1, stdout="", stderr="permission denied"),
         ]
 
@@ -268,7 +267,6 @@ class TestIssueToPrStepFailures:
         mock_wh.run.return_value = _success_response()
 
         mock_run.side_effect = [
-            *_ensure_branch_ok(),
             subprocess.TimeoutExpired(cmd="git", timeout=60),
         ]
 
@@ -284,7 +282,6 @@ class TestIssueToPrStepFailures:
         mock_wh.run.return_value = _success_response()
 
         mock_run.side_effect = [
-            *_ensure_branch_ok(),
             _ok(),
             MagicMock(returncode=1, stdout="", stderr="rate limited"),
         ]
@@ -301,7 +298,6 @@ class TestIssueToPrStepFailures:
         mock_wh.run.return_value = _success_response()
 
         mock_run.side_effect = [
-            *_ensure_branch_ok(),
             _ok(),
             subprocess.TimeoutExpired(cmd="gh", timeout=60),
         ]
@@ -316,7 +312,6 @@ class TestIssueToPrStepFailures:
         cfg = _make_config()
         mock_wh = MagicMock()
         mock_wh.run.side_effect = WhProcessError(returncode=2, stderr="bad")
-        mock_run.side_effect = _ensure_branch_ok()
 
         orch = IssueToPr(config=cfg, wh_client=mock_wh)
         with pytest.raises(IssueToPrError):
@@ -331,7 +326,6 @@ class TestIssueToPrStepFailures:
         mock_wh.run.return_value = _success_response()
 
         mock_run.side_effect = [
-            *_ensure_branch_ok(),
             MagicMock(returncode=1, stdout="", stderr="permission denied"),
         ]
 
@@ -368,7 +362,6 @@ class TestIssueToPrStepFailures:
         mock_wh.run.return_value = _success_response()
 
         mock_run.side_effect = [
-            *_ensure_branch_ok(),
             _ok(),
             PermissionError("Permission denied"),
         ]
@@ -385,7 +378,6 @@ class TestIssueToPrStepFailures:
         mock_wh.run.return_value = _success_response()
 
         mock_run.side_effect = [
-            *_ensure_branch_ok(),
             _ok(),
             MagicMock(returncode=0, stdout="", stderr=""),
         ]
@@ -402,7 +394,6 @@ class TestIssueToPrStepFailures:
         mock_wh.run.return_value = _success_response()
 
         mock_run.side_effect = [
-            *_ensure_branch_ok(),
             _ok(),
             MagicMock(
                 returncode=0,
@@ -609,25 +600,25 @@ class TestWhCreateCliShape:
         args = mock_wh.run.call_args[0]
         assert args[0:3] == ("worktree", "create", "--repo")
         assert args[3] == "/tmp/repo"
-        assert args[4] == "acme"
-        assert args[5] == "example-repo"
-        assert args[6] == "issue-8"
-        assert args[7] == "feature/issue-8"
+        assert args[4:6] == ("--start-point", "origin/main")
+        assert args[6] == "acme"
+        assert args[7] == "example-repo"
+        assert args[8] == "issue-8"
+        assert args[9] == "feature/issue-8"
         # Old flag shape must not be used
         assert "--issue" not in args
         assert "--path" not in args
 
     @patch("worktrees_hives.issue_to_pr.subprocess.run")
-    def test_base_precreates_branch_with_force(self, mock_run):
-        """Any base (incl. main) force-creates the feature branch from that base."""
-        cfg = _make_config(base_branch="release/1.0", repo_path="/tmp/repo")
+    def test_start_point_is_delegated_without_raw_branch_mutation(self, mock_run):
+        cfg = _make_config(
+            base_branch="release/1.0",
+            start_point="origin/release/1.0",
+            repo_path="/tmp/repo",
+        )
         mock_wh = MagicMock()
         mock_wh.run.return_value = _success_response()
-        # local base missing → remote-tracking; then branch -f; push; gh
         mock_run.side_effect = [
-            MagicMock(returncode=1, stdout="", stderr=""),  # no local release/1.0
-            MagicMock(returncode=0, stdout="", stderr=""),  # origin/release/1.0 exists
-            MagicMock(returncode=0, stdout="", stderr=""),  # branch -f
             MagicMock(returncode=0, stdout="", stderr=""),  # push
             MagicMock(
                 returncode=0,
@@ -636,34 +627,11 @@ class TestWhCreateCliShape:
             ),
         ]
         IssueToPr(config=cfg, wh_client=mock_wh).run()
-        branch_cmd = None
-        for call in mock_run.call_args_list:
-            cmd = call[0][0]
-            if isinstance(cmd, list) and "branch" in cmd and "-f" in cmd:
-                branch_cmd = cmd
-                break
-        assert branch_cmd is not None
-        assert branch_cmd[:3] == ["git", "-C", "/tmp/repo"]
-        assert branch_cmd[-2:] == ["feature/issue-8", "origin/release/1.0"]
+        wh_args = mock_wh.run.call_args[0]
+        assert wh_args[4:6] == ("--start-point", "origin/release/1.0")
+        assert all("branch" not in call[0][0] for call in mock_run.call_args_list)
         gh_cmd = _gh_cmd_from_calls(mock_run)
         assert gh_cmd[gh_cmd.index("--base") + 1] == "release/1.0"
-
-    @patch("worktrees_hives.issue_to_pr.subprocess.run")
-    def test_main_base_also_precreates_from_main(self, mock_run):
-        """Default main base must not branch from arbitrary HEAD."""
-        cfg = _make_config(base_branch="main", repo_path="/tmp/repo")
-        mock_wh = MagicMock()
-        mock_wh.run.return_value = _success_response()
-        mock_run.side_effect = _happy_side_effect("https://github.com/acme/example-repo/pull/1\n")
-        IssueToPr(config=cfg, wh_client=mock_wh).run()
-        branch_cmd = None
-        for call in mock_run.call_args_list:
-            cmd = call[0][0]
-            if isinstance(cmd, list) and "branch" in cmd and "-f" in cmd:
-                branch_cmd = cmd
-                break
-        assert branch_cmd is not None
-        assert branch_cmd[-2:] == ["feature/issue-8", "main"]
 
 
 class TestRemotePathBaseRejection:

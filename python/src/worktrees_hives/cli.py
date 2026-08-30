@@ -510,6 +510,7 @@ def cmd_lab_run(args: argparse.Namespace) -> int:
                 manager,
                 owner=args.owner,
                 repo=args.repo,
+                start_point=args.start_point,
                 hypothesis_id=args.hypothesis_id,
                 agent_id=args.agent_id,
                 role=args.role,
@@ -691,6 +692,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     run_p.add_argument("--owner", required=True, help="Repository owner (allowlisted)")
     run_p.add_argument("--repo", required=True, help="Repository name")
+    run_p.add_argument(
+        "--start-point",
+        required=True,
+        help="Commit or ref at which the new lab branch must be created",
+    )
     run_p.add_argument(
         "--hypothesis-id",
         required=True,

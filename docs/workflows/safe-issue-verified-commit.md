@@ -42,7 +42,7 @@ Abort and report if any of these fail:
 1. If this repo uses Beads, run `bd prime`, inspect `bd ready`, and claim the relevant bead.
 2. Start from an up-to-date base. Never edit `main` or `master`.
 3. Create or reuse a dedicated branch and isolated worktree:
-   - Required: `wh --json worktree create` (`WH_BIN` or `PATH`).
+   - Required: `wh --json worktree create --repo <repo> --start-point <exact-commit-or-ref> <owner> <repo-name> <job-id> <branch>` (`WH_BIN` or `PATH`). Never omit the caller-selected start point or derive it from the source checkout's ambient `HEAD`.
    - If `wh` is missing, a platform-specific wrapper may call Git only after it has enforced: worktree root under the configured base, no path traversal, expected job branch, expected remote, owner allowlist from `WH_ALLOWED_OWNERS` or explicit API args, and assigned-worktree identity.
    - Raw `git worktree add` is forbidden on mutating runs.
 4. Suggested issue branch: `hive/issue-<n>-<short-slug>` (document any local override).

@@ -73,6 +73,9 @@ enum WorktreeAction {
         job_id: String,
         /// Branch name for the worktree.
         branch: String,
+        /// Commit or ref at which the new branch must be created.
+        #[arg(long)]
+        start_point: String,
     },
     /// List hive worktrees under the configured base.
     List,
@@ -149,9 +152,10 @@ fn run_worktree(
             repo_name,
             job_id,
             branch,
+            start_point,
         } => {
             let manager = WorktreeManager::new()?;
-            let wt = manager.create(&repo, &owner, &repo_name, &job_id, &branch)?;
+            let wt = manager.create(&repo, &owner, &repo_name, &job_id, &branch, &start_point)?;
             Response {
                 ok: true,
                 schema_version: wh_core::contract::SCHEMA_VERSION,
@@ -160,6 +164,7 @@ fn run_worktree(
                     "path": wt.path,
                     "branch": wt.branch,
                     "repo_root": wt.repo_root,
+                    "start_commit": wt.start_commit,
                 }),
                 error: None,
             }
@@ -516,7 +521,7 @@ mod tests {
     use std::process::ExitCode;
     use std::str;
 
-    use clap::CommandFactory;
+    use clap::{CommandFactory, Parser};
     use wh_core::status::{CiClass, JobStatus, ProcessState};
 
     use super::{Cli, run, run_status, run_with_jobs, supervised_exit_code};
@@ -539,6 +544,36 @@ mod tests {
     #[test]
     fn command_definition_is_valid() {
         Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn worktree_create_requires_explicit_start_point() {
+        let missing = Cli::try_parse_from([
+            "wh", "worktree", "create", "--repo", ".", "acme", "repo", "job", "branch",
+        ]);
+        assert!(missing.is_err());
+
+        let parsed = Cli::try_parse_from([
+            "wh",
+            "worktree",
+            "create",
+            "--repo",
+            ".",
+            "--start-point",
+            "origin/trunk",
+            "acme",
+            "repo",
+            "job",
+            "branch",
+        ])
+        .unwrap();
+        let Some(super::Command::Worktree {
+            action: super::WorktreeAction::Create { start_point, .. },
+        }) = parsed.command
+        else {
+            panic!("expected worktree create command")
+        };
+        assert_eq!(start_point, "origin/trunk");
     }
 
     #[tokio::test]

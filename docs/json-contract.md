@@ -76,10 +76,13 @@ wh --json
 Create a new isolated worktree for a job.
 
 ```bash
-wh --json worktree create --repo /path/to/repo acme example-repo wh-123 feature/fix
+wh --json worktree create --repo /path/to/repo --start-point origin/trunk acme example-repo wh-123 feature/fix
 ```
 
-**Request parameters:** `--repo` flag plus positionals `<owner> <repo_name> <job_id> <branch>`.
+**Request parameters:** required `--repo` and `--start-point <commit-or-ref>` flags plus
+positionals `<owner> <repo_name> <job_id> <branch>`. The start point is resolved to a
+commit before any mutation. Existing branches are rejected unless a future contract can
+prove a durable resume identity.
 
 **Success response:**
 ```json
@@ -90,7 +93,8 @@ wh --json worktree create --repo /path/to/repo acme example-repo wh-123 feature/
   "data": {
     "path": "/home/user/.local/share/worktrees-hives/worktrees/acme/example-repo/wh-123",
     "branch": "feature/fix",
-    "repo_root": "/path/to/repo"
+    "repo_root": "/path/to/repo",
+    "start_commit": "0123456789abcdef0123456789abcdef01234567"
   },
   "error": null
 }

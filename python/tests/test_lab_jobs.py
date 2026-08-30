@@ -119,6 +119,7 @@ class TestAllocate:
         job = mgr.allocate(
             owner=TEST_OWNER,
             repo=TEST_REPO,
+            start_point="origin/main",
             hypothesis_id="H-001",
             agent_id="grok-lab",
             role=AgentRole.AGENT,
@@ -130,7 +131,8 @@ class TestAllocate:
         assert store.get(job.job_id) is not None
         args = wh.run.call_args[0]
         assert args[0:3] == ("worktree", "create", "--repo")
-        assert args[4:8] == (TEST_OWNER, TEST_REPO, "lab-H-001", "lab/H-001")
+        assert args[4:6] == ("--start-point", "origin/main")
+        assert args[6:10] == (TEST_OWNER, TEST_REPO, "lab-H-001", "lab/H-001")
 
     def test_duplicate_job_id(self, tmp_path: Path) -> None:
         mgr, wh, _ = _manager(tmp_path)
@@ -139,6 +141,7 @@ class TestAllocate:
         mgr.allocate(
             owner=TEST_OWNER,
             repo=TEST_REPO,
+            start_point="origin/main",
             hypothesis_id="H-001",
             agent_id="a",
             role="agent",
@@ -149,6 +152,7 @@ class TestAllocate:
             mgr.allocate(
                 owner=TEST_OWNER,
                 repo=TEST_REPO,
+                start_point="origin/main",
                 hypothesis_id="H-001",
                 agent_id="b",
                 role="subagent",
@@ -161,8 +165,8 @@ class TestAllocate:
         mgr, wh, _ = _manager(tmp_path)
 
         def _side_effect(*args: str, **_kwargs: object) -> SuccessResponse:
-            jid = args[6]
-            branch = args[7]
+            jid = args[8]
+            branch = args[9]
             path = os.path.join(str(tmp_path / "wt"), TEST_OWNER, TEST_REPO, jid)
             return _ok_create(path=path, branch=branch)
 
@@ -170,6 +174,7 @@ class TestAllocate:
         j1 = mgr.allocate(
             owner=TEST_OWNER,
             repo=TEST_REPO,
+            start_point="origin/main",
             hypothesis_id="H-001",
             agent_id="a",
             role="agent",
@@ -177,6 +182,7 @@ class TestAllocate:
         j2 = mgr.allocate(
             owner=TEST_OWNER,
             repo=TEST_REPO,
+            start_point="origin/main",
             hypothesis_id="H-001",
             agent_id="b",
             role="subagent",
@@ -191,6 +197,7 @@ class TestAllocate:
             mgr.allocate(
                 owner="evil",
                 repo=TEST_REPO,
+                start_point="origin/main",
                 hypothesis_id="H-1",
                 agent_id="a",
                 role=AgentRole.AGENT,
@@ -203,6 +210,7 @@ class TestAllocate:
             mgr.allocate(
                 owner=TEST_OWNER,
                 repo=TEST_REPO,
+                start_point="origin/main",
                 hypothesis_id="H-1",
                 agent_id="a",
                 role=AgentRole.AGENT,
@@ -215,7 +223,7 @@ class TestAllocate:
         p2 = os.path.join(str(tmp_path / "wt"), TEST_OWNER, TEST_REPO, "lab-B")
 
         def _side_effect(*args: str, **_kwargs: object) -> SuccessResponse:
-            jid = args[6]
+            jid = args[8]
             path = p1 if jid == "lab-A" else p2
             return _ok_create(path=path, branch=f"lab/{jid}")
 
@@ -223,6 +231,7 @@ class TestAllocate:
         j1 = mgr.allocate(
             owner=TEST_OWNER,
             repo=TEST_REPO,
+            start_point="origin/main",
             hypothesis_id="A",
             agent_id="a1",
             role=AgentRole.AGENT,
@@ -232,6 +241,7 @@ class TestAllocate:
         j2 = mgr.allocate(
             owner=TEST_OWNER,
             repo=TEST_REPO,
+            start_point="origin/main",
             hypothesis_id="B",
             agent_id="a2",
             role=AgentRole.SUBAGENT,
@@ -272,6 +282,7 @@ class TestAllocate:
             mgr.allocate(
                 owner=TEST_OWNER,
                 repo=TEST_REPO,
+                start_point="origin/main",
                 hypothesis_id="H-race",
                 agent_id="a",
                 role=AgentRole.AGENT,
@@ -297,6 +308,7 @@ class TestTeardown:
         job = mgr.allocate(
             owner=TEST_OWNER,
             repo=TEST_REPO,
+            start_point="origin/main",
             hypothesis_id="H-001",
             agent_id="grok",
             role=AgentRole.AGENT,
@@ -325,6 +337,7 @@ class TestTeardown:
             mgr.allocate(
                 owner=TEST_OWNER,
                 repo=TEST_REPO,
+                start_point="origin/main",
                 hypothesis_id="H-9",
                 agent_id="a",
                 role=AgentRole.AGENT,
