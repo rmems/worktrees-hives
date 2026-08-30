@@ -241,6 +241,20 @@ class TestAggregateMarkdown:
         assert "## Attribution" in md_agent
         assert "Fable 5 (agent)" in md_agent
 
+    def test_inline_newlines_are_flattened_after_shared_escaping(self) -> None:
+        unit = AggregateUnit(
+            hypothesis_id="H-1",
+            findings_json="findings.json",
+            findings_md="findings.md",
+            outcome=UnitOutcome.MISSING_REPORT,
+            detail="first\r\nsecond",
+        )
+        md = AggregateReport(units=(unit,), attribution="agent\nname").to_markdown()
+        assert "first  second" in md
+        assert "agent name" in md
+        assert r"first\r\nsecond" not in md
+        assert r"agent\nname" not in md
+
     def test_pipes_in_hypothesis_id_do_not_break_table(self, tmp_path: Path) -> None:
         unit = collect_unit("H|X", tmp_path / "x.json", tmp_path / "x.md")
         md = AggregateReport(units=(unit,)).to_markdown()

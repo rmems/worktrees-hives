@@ -350,6 +350,23 @@ class TestReviewFollowups:
         assert r"\_under\_" in md
         assert "uses **" not in md  # raw unescaped bold markers from summary must not appear
 
+    def test_markdown_escapes_newlines_in_finding_text(self) -> None:
+        report = _valid_report(
+            findings=(
+                Finding(
+                    type=FindingType.DISCOVERY,
+                    summary="first line\n# forged heading",
+                    detail="detail\r\nwith another line",
+                    evidence=("evidence\n- forged bullet",),
+                ),
+            )
+        )
+        md = report.to_markdown()
+        assert r"first line\n# forged heading" in md
+        assert r"detail\r\nwith another line" in md
+        assert r"evidence\n- forged bullet" in md
+        assert "first line\n# forged heading\n" not in md
+
     def test_write_pair_does_not_leave_json_if_md_invalid(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
