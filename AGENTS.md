@@ -15,7 +15,6 @@ This file defines how coding agents contribute to `worktrees-hives` and how the 
 - **Never use bare `git push --force`** or `git push -f`. Only `--force-with-lease` is permitted, and only for rebasing your own branch.
 - **Never edit outside** a job's assigned worktree or branch.
 - **Repository scope** is a **configured owner allowlist** (env `WH_ALLOWED_OWNERS` and/or explicit API args). There is no built-in default org; operators supply the owners they manage. Empty allowlist means deny-by-default for multi-owner discovery/scheduling unless a module documents otherwise (e.g. single-PR babysit with an explicit owner).
-- **Limit code-fix commits** to three per PR per babysit cycle. Replies are unlimited.
 - **Process stacked PRs** from the bottom of the stack upward.
 - **Post review replies** only after pushing, and include the pushed SHA plus agent attribution.
 - **Preserve commit attribution:** Every Codex-authored commit must include the exact trailers `Agent: Codex` and `Co-authored-by: Codex <noreply@openai.com>`. Never rewrite a Cursor-authored or Cursor-co-authored commit merely to change attribution; add a new correctly attributed commit instead.
@@ -57,15 +56,16 @@ Before using `--force-with-lease`, verify:
 - Current branch is the assigned worktree branch (not `main` or another agent's branch).
 - Remote ref matches expectations (no unexpected pushes from others).
 
-### Fix-cap semantics
+### Fix-budget semantics
 
-Each PR gets a maximum of **3 code-fix commits** per babysit cycle.
+Babysit fix budgets are caller-configured.
 
+- **Default:** Unlimited when ``max_fixes`` is omitted.
 - **Counts:** Commits changing source code, tests, config, or behavior-affecting docs.
 - **Does not count:** Merge commits from rebasing, CI-triggered commits, reply comments.
-- **At cap:** Stop committing. Report residual issues as PR comments. Continue replying to reviews and monitoring CI.
+- **At configured budget:** Stop committing if the explicit budget is exhausted. Report residual issues as PR comments and continue replying to reviews while monitoring CI.
 - **Residual reporting:** Post a comment listing remaining CI failures, unresolved review threads, and recommended next steps.
-- **Reset:** Cap resets when the operator starts a new babysit cycle.
+- **Reset:** Budgets reset when the operator starts a new babysit cycle.
 
 ### Branch/worktree pre-edit checklist
 
@@ -84,7 +84,7 @@ If any check fails, abort and report the mismatch.
 When a babysit cycle ends, report:
 
 - **PR status:** Open / Ready for review / Blocked
-- **Fix count:** Number of code-fix commits pushed (e.g., "2/3")
+- **Fix count:** Number of code-fix commits pushed (bounded budgets may show `used/limit`, unbounded shows `used`).
 - **Residual issues:** Unresolved CI failures, review comments, or blockers
 - **Agent attribution:** Every PR comment and commit message includes agent identification
 
@@ -202,7 +202,7 @@ Python code will live in `python/src/worktrees_hives/`:
 - The subprocess bridge locates `wh` through `WH_BIN` or `PATH` and validates JSON responses.
 - Discovery, partitioning, issue-to-PR, babysit, and reporting modules own high-level policy.
 - Python must not reimplement Rust-owned worktree, state, branch, or git safety checks.
-- The three-code-fix-commit budget is a Python orchestration rule; Rust still rejects unsafe individual commands.
+- A caller may configure a finite babysit fix budget; Rust still rejects unsafe individual commands.
 
 ### Agent skill
 

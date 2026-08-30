@@ -1,11 +1,11 @@
-"""PR babysit cycle: monitor CI, resolve review threads, enforce fix cap.
+"""PR babysit cycle: monitor CI, resolve review threads, apply fixes safely.
 
 Generalises the single-repo pr-babysit skill into a callable Python module
 that can be driven by the hive orchestrator across multiple repos in parallel.
 
 Safety invariants (from AGENTS.md):
   - Never merge a PR.
-  - Max 3 code-fix commits per PR per cycle; thread replies are unlimited.
+  - Fix handling is bounded only by caller-provided limits.
   - Force-push only with --force-with-lease.
   - Post review replies only after pushing, including SHA + attribution.
 """
@@ -27,7 +27,6 @@ if TYPE_CHECKING:
 # Constants
 # ---------------------------------------------------------------------------
 
-MAX_FIX_COMMITS_PER_CYCLE = 3
 DEFAULT_ATTRIBUTION = "worktrees-hives agent"
 ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 WH_ALLOWED_OWNERS_ENV = "WH_ALLOWED_OWNERS"
@@ -209,7 +208,7 @@ class BabysitResult:
     def summary(self) -> str:
         lines = [
             f"PR #{self.pr_number}: {self.state.value}",
-            f"  Fixes: {self.fix_commits_used}/{MAX_FIX_COMMITS_PER_CYCLE}",
+            f"  Fixes: {self.fix_commits_used}",
             f"  Threads resolved: {self.threads_resolved}, remaining: {self.threads_remaining}",
             f"  Checks: {self.checks_passed} passed, {self.checks_failed} failed, "
             f"{self.checks_pending} pending",
@@ -664,7 +663,7 @@ class BabysitCycle:
     repo: str
     pr_number: int
     attribution: str = DEFAULT_ATTRIBUTION
-    max_fixes: int = MAX_FIX_COMMITS_PER_CYCLE
+    max_fixes: int | None = None
     # Optional worker that applies a code fix for a thread and returns the
     # pushed HEAD SHA (or multiple SHAs as a sequence). Without a successful
     # return value, FIX_AND_REPLY must not claim "Addressed" or resolve.
@@ -684,13 +683,7 @@ class BabysitCycle:
 
     def __post_init__(self) -> None:
         self._effective_allowed_owners = assert_owner_allowed(self.owner, self.allowed_owners)
-        if self.max_fixes > MAX_FIX_COMMITS_PER_CYCLE:
-            raise ValueError(
-                f"max_fixes ({self.max_fixes}) exceeds safety ceiling "
-                f"({MAX_FIX_COMMITS_PER_CYCLE}). Per AGENTS.md, at most "
-                f"{MAX_FIX_COMMITS_PER_CYCLE} code-fix commits per PR per cycle."
-            )
-        if self.max_fixes < 0:
+        if self.max_fixes is not None and self.max_fixes < 0:
             raise ValueError("max_fixes must be non-negative")
 
     def run(self) -> BabysitResult:
@@ -765,7 +758,6 @@ class BabysitCycle:
         result.threads_remaining = len(threads)
 
         allow = self._effective_allowed_owners
-        hit_cap = False
         for thread in threads:
             action = self._decide_thread_action(thread)
             if action == ThreadAction.FIX_AND_REPLY:
@@ -811,7 +803,7 @@ class BabysitCycle:
                                 primary = head[:8]
                                 self._fix_shas.add(head)
                                 break
-                except ValueError, subprocess.TimeoutExpired:
+                except (ValueError, subprocess.TimeoutExpired):
                     pass
                 reply_body = f"Addressed in {primary}: {self.attribution}"
                 try:
@@ -837,7 +829,6 @@ class BabysitCycle:
                 result.threads_resolved += 1
                 result.threads_remaining -= 1
             elif action == ThreadAction.REPLY_ONLY:
-                hit_cap = True
                 reply_body = self._draft_substantive_reply()
                 try:
                     reply_to_thread(
@@ -885,29 +876,33 @@ class BabysitCycle:
                 result.residual_blockers.append(f"CI re-check after fix failed: {e}")
                 result.checks_failed = max(result.checks_failed, 1)
 
-        # Cap residual: post aggregate PR comment when budget exhausted.
-        if hit_cap or self._fixes_used >= self.max_fixes:
-            residual_report = (
-                f"## Babysit residual (fix cap {self.max_fixes})\n\n"
-                f"- Fix commits this cycle: {self._fixes_used}\n"
-                f"- Threads remaining: {result.threads_remaining}\n"
-                f"- Checks failed: {result.checks_failed}, pending: {result.checks_pending}\n"
+        # Post a residual summary for transparency, regardless of cap mode.
+        budget_text = "(unbounded)"
+        if self.max_fixes is not None:
+            budget_text = f"(limit {self.max_fixes})"
+        residual_report = (
+            f"## Babysit residual {budget_text}\n\n"
+            f"- Fix commits this cycle: {self._fixes_used}"
+            + (f"/{self.max_fixes}" if self.max_fixes is not None else "")
+            + "\n"
+            f"- Threads remaining: {result.threads_remaining}\n"
+            f"- Checks failed: {result.checks_failed}, pending: {result.checks_pending}\n"
+        )
+        if result.residual_blockers:
+            residual_report += "\n### Blockers\n" + "\n".join(
+                f"- {b}" for b in result.residual_blockers
             )
-            if result.residual_blockers:
-                residual_report += "\n### Blockers\n" + "\n".join(
-                    f"- {b}" for b in result.residual_blockers
-                )
-            residual_report += f"\n\n-- {self.attribution}"
-            try:
-                post_pr_comment(
-                    self.owner,
-                    self.repo,
-                    self.pr_number,
-                    residual_report,
-                    allowed_owners=allow,
-                )
-            except (subprocess.CalledProcessError, subprocess.TimeoutExpired, ValueError) as e:
-                result.residual_blockers.append(f"Failed to post residual cap summary: {e}")
+        residual_report += f"\n\n-- {self.attribution}"
+        try:
+            post_pr_comment(
+                self.owner,
+                self.repo,
+                self.pr_number,
+                residual_report,
+                allowed_owners=allow,
+            )
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, ValueError) as e:
+            result.residual_blockers.append(f"Failed to post residual summary: {e}")
 
         # Final state assessment -- preserve higher-severity states (incl. rollup)
         result.fix_commits_used = self._fixes_used
@@ -939,7 +934,7 @@ class BabysitCycle:
         """Decide what to do with an unresolved review thread."""
         if not self._is_actionable(thread):
             return ThreadAction.SKIPPED
-        if self._fixes_used >= self.max_fixes:
+        if self.max_fixes is not None and self._fixes_used >= self.max_fixes:
             return ThreadAction.REPLY_ONLY
         return ThreadAction.FIX_AND_REPLY
 
@@ -973,10 +968,15 @@ class BabysitCycle:
 
     def _draft_substantive_reply(self) -> str:
         """Draft a substantive reply when fix budget is exhausted."""
+        if self.max_fixes is None:
+            return (
+                "Thank you for the review. I could not apply this fix during "
+                f"this cycle and will continue with the next pass. -- {self.attribution}"
+            )
         return (
             f"Thank you for the review. The fix budget for this cycle "
             f"({self.max_fixes} commits) has been reached. "
-            f"This feedback will be addressed in the next cycle. "
+            "This feedback will be addressed in the next cycle. "
             f"-- {self.attribution}"
         )
 
@@ -984,7 +984,7 @@ class BabysitCycle:
         """Invoke the optional fix worker.
 
         Returns a list of new commit SHAs pushed (possibly empty). Counts
-        unique SHAs toward the fix cap, not threads resolved.
+        unique SHAs toward the optional fix limit, not threads resolved.
         """
         if self.fix_handler is None:
             return []
@@ -1038,7 +1038,7 @@ def babysit_multiple(
     pr_numbers: list[int],
     attribution: str = DEFAULT_ATTRIBUTION,
     fix_handler: Callable[[ReviewThread], str | list[str] | None] | None = None,
-    max_fixes: int = MAX_FIX_COMMITS_PER_CYCLE,
+    max_fixes: int | None = None,
     allowed_owners: frozenset[str] | None = None,
 ) -> list[BabysitResult]:
     """Run babysit cycles on multiple PRs in the same repo.

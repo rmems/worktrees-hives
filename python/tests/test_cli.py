@@ -330,8 +330,8 @@ class TestBabysit:
         assert seen["max_fixes"] == 2
         assert seen["attribution"] == "Test agent"
 
-    def test_defaults_match_the_safety_cap(self, monkeypatch):
-        from worktrees_hives.babysit import DEFAULT_ATTRIBUTION, MAX_FIX_COMMITS_PER_CYCLE
+    def test_defaults_are_unlimited(self, monkeypatch):
+        from worktrees_hives.babysit import DEFAULT_ATTRIBUTION
 
         _allow_owner(monkeypatch)
         seen = {}
@@ -342,7 +342,7 @@ class TestBabysit:
 
         monkeypatch.setattr("worktrees_hives.babysit.babysit_multiple", fake)
         main(["babysit", "--owner", OWNER, "--repo", REPO, "5"])
-        assert seen["max_fixes"] == MAX_FIX_COMMITS_PER_CYCLE
+        assert seen["max_fixes"] is None
         assert seen["attribution"] == DEFAULT_ATTRIBUTION
 
     def test_human_output_never_claims_a_merge(self, monkeypatch, capsys):
@@ -394,12 +394,7 @@ class TestBabysit:
         with pytest.raises(SystemExit):
             main(["babysit", "--owner", OWNER, "--repo", REPO, "not-a-number"])
 
-    def test_max_fixes_above_ceiling_exits_2(self, monkeypatch, capsys):
-        from worktrees_hives.babysit import MAX_FIX_COMMITS_PER_CYCLE
-
-        # Ceiling is checked before allowlist so we need not configure owners,
-        # but set one so a regression that reorders checks still fails closed
-        # on max-fixes rather than flaking on allowlist.
+    def test_negative_max_fixes_exits_2(self, monkeypatch, capsys):
         _allow_owner(monkeypatch)
         monkeypatch.setattr("worktrees_hives.babysit.babysit_multiple", lambda **kw: [])
         assert (
@@ -412,12 +407,12 @@ class TestBabysit:
                     REPO,
                     "1",
                     "--max-fixes",
-                    str(MAX_FIX_COMMITS_PER_CYCLE + 1),
+                    "-1",
                 ]
             )
             == 2
         )
-        assert "safety cap" in capsys.readouterr().err
+        assert "max_fixes must be non-negative" in capsys.readouterr().err
 
     def test_empty_allowlist_exits_2_without_running_cycle(self, monkeypatch, capsys):
         """Fail closed: empty WH_ALLOWED_OWNERS must not look like success."""

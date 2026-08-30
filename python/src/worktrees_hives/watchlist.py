@@ -26,7 +26,6 @@ if TYPE_CHECKING:
 STATE_FILENAME = "watchlist.json"
 WH_WATCHLIST_PATH_ENV = "WH_WATCHLIST_PATH"
 WH_ALLOWED_OWNERS_ENV = "WH_ALLOWED_OWNERS"
-MAX_FIXES_CEILING = 3
 
 # Empty default — no org hardcoding. Configure via WH_ALLOWED_OWNERS or
 # Watchlist(allowed_owners=...). Empty allowlist = deny-by-default (no owner matches).
@@ -64,8 +63,8 @@ class JobState:
     status: JobStatus = JobStatus.PENDING
     stack_id: str | None = None
     fix_count: int = 0
-    max_fixes: int = 3
-    # Identifies the current babysit cycle for fix-budget accounting (AGENTS.md).
+    max_fixes: int | None = None
+    # Identifies the current babysit cycle for fix-budget accounting.
     babysit_cycle: str | None = None
     residual_blockers: list[str] = field(default_factory=list)
     pr_number: int | None = None
@@ -88,9 +87,11 @@ class JobState:
         }
 
     @property
-    def fix_budget_remaining(self) -> int:
+    def fix_budget_remaining(self) -> int | None:
         """Return remaining fix commits allowed."""
-        return max(0, min(self.max_fixes, MAX_FIXES_CEILING) - self.fix_count)
+        if self.max_fixes is None:
+            return None
+        return max(0, self.max_fixes - self.fix_count)
 
 
 # Known JobState field names for additive-v1 compatibility (ignore extras on construct).
@@ -223,23 +224,10 @@ def _read_json(path: Path) -> dict[str, Any]:
 
 
 def _validate_max_fixes(max_fixes: int) -> int:
-    """Validate max_fixes is in [0, MAX_FIXES_CEILING] for write paths (add)."""
+    """Validate max_fixes is non-negative for write paths (add)."""
     if max_fixes < 0:
         raise ValueError("max_fixes must be non-negative")
-    if max_fixes > MAX_FIXES_CEILING:
-        raise PolicyError(
-            "MAX_FIXES_CEILING",
-            f"max_fixes ({max_fixes}) exceeds safety ceiling ({MAX_FIXES_CEILING}). "
-            "Per AGENTS.md, at most 3 code-fix commits per PR per cycle.",
-        )
     return max_fixes
-
-
-def _clamp_max_fixes(max_fixes: int) -> int:
-    """Clamp loaded max_fixes into [0, MAX_FIXES_CEILING] without dropping the job."""
-    if max_fixes < 0:
-        return 0
-    return min(max_fixes, MAX_FIXES_CEILING)
 
 
 def _owner_allowed(owner: str, allowed_owners: frozenset[str]) -> bool:
@@ -295,7 +283,7 @@ class Watchlist:
             yield
 
     def _load(self) -> None:
-        """Load state from disk; clamp max_fixes; filter by owner allowlist.
+        """Load state from disk; preserve configured max_fixes; filter by owner allowlist.
 
         Unknown keys on job objects are treated as additive v1 fields: filtered
         out of JobState construction and preserved for round-trip on save so a
@@ -341,8 +329,10 @@ class Watchlist:
                 extras = {k: v for k, v in raw.items() if k not in _JOB_STATE_FIELDS}
                 d = {k: v for k, v in raw.items() if k in _JOB_STATE_FIELDS}
                 d["status"] = JobStatus(d["status"])
-                max_fixes = _clamp_max_fixes(int(d.get("max_fixes", 3)))
-                d["max_fixes"] = max_fixes
+                raw_max_fixes = d.get("max_fixes")
+                d["max_fixes"] = (
+                    None if raw_max_fixes is None else _validate_max_fixes(int(raw_max_fixes))
+                )
                 fix_count = int(d.get("fix_count", 0))
                 if fix_count < 0:
                     fix_count = 0
@@ -397,15 +387,15 @@ class Watchlist:
         repo: str,
         branch: str,
         stack_id: str | None = None,
-        max_fixes: int = 3,
+        max_fixes: int | None = None,
     ) -> JobState:
         """Add a new job to the watchlist.
 
         Raises ValueError if job_id already exists or max_fixes is negative.
-        Raises PolicyError if max_fixes exceeds the safety ceiling (3) or
-        owner is outside the configured allowlist.
+        Raises PolicyError if owner is outside the configured allowlist.
         """
-        max_fixes = _validate_max_fixes(max_fixes)
+        if max_fixes is not None:
+            max_fixes = _validate_max_fixes(max_fixes)
         if not _owner_allowed(owner, self._allowed_owners):
             allow = sorted(self._allowed_owners)
             hint = (
@@ -488,9 +478,9 @@ class Watchlist:
     def begin_babysit_cycle(self, cycle_id: str, job_id: str | None = None) -> None:
         """Start a babysit cycle, resetting fix_count for the cycle budget.
 
-        Per AGENTS.md the 3-fix cap is per babysit cycle. When ``cycle_id``
-        differs from the job's stored ``babysit_cycle``, ``fix_count`` resets
-        to 0. Pass ``job_id`` to scope one job; omit to apply to all active jobs.
+        When ``cycle_id`` differs from the job's stored ``babysit_cycle``,
+        ``fix_count`` resets to 0. Pass ``job_id`` to scope one job; omit to
+        apply to all active jobs.
         """
         if not cycle_id:
             raise ValueError("cycle_id must be non-empty")
@@ -510,14 +500,13 @@ class Watchlist:
     def increment_fix_count(self, job_id: str, cycle_id: str | None = None) -> JobState:
         """Increment the fix count for a job in the current babysit cycle.
 
-        Enforces both the per-job max_fixes budget and the global safety
-        ceiling (MAX_FIXES_CEILING) so a misconfigured max cannot exceed policy.
+        Enforces per-job max_fixes budget when configured.
 
         If ``cycle_id`` is provided and differs from the job's cycle, the
         budget resets (new babysit cycle) before incrementing.
 
         Raises KeyError if job_id not found.
-        Raises PolicyError if fix budget or safety ceiling is exhausted.
+        Raises PolicyError if the configured fix budget is exhausted.
         """
         with self._locked():
             job = self._jobs.get(job_id)
@@ -526,9 +515,9 @@ class Watchlist:
             if cycle_id is not None and job.babysit_cycle != cycle_id:
                 job.babysit_cycle = cycle_id
                 job.fix_count = 0
-            effective_max = min(job.max_fixes, MAX_FIXES_CEILING)
-            # AGENTS.md: cap is per PR per cycle — sum siblings sharing owner/repo/PR.
-            if job.pr_number is not None:
+            # If a PR is set and this job has a finite budget, share the budget
+            # across sibling jobs in the same owner/repo/PR/cycle.
+            if job.pr_number is not None and job.max_fixes is not None:
                 used = sum(
                     j.fix_count
                     for j in self._jobs.values()
@@ -539,11 +528,11 @@ class Watchlist:
                 )
             else:
                 used = job.fix_count
-            if used >= effective_max:
+            if job.max_fixes is not None and used >= job.max_fixes:
                 raise PolicyError(
                     "FIX_BUDGET_EXHAUSTED",
                     f"Job {job_id!r} has exhausted its fix budget "
-                    f"({effective_max}; ceiling {MAX_FIXES_CEILING}"
+                    f"({job.max_fixes}"
                     + (
                         f"; PR #{job.pr_number} cycle total {used}"
                         if job.pr_number is not None
@@ -657,7 +646,8 @@ class Watchlist:
                 # Active worker — never re-queue PR creation or concurrent fixes.
                 result["in_progress"].append(job)
             elif job.residual_blockers:
-                if job.fix_budget_remaining > 0 and job.status != JobStatus.BLOCKED:
+                budget_remaining = job.fix_budget_remaining
+                if (budget_remaining is None or budget_remaining > 0) and job.status != JobStatus.BLOCKED:
                     result["needs_fix"].append(job)
                 else:
                     result["blocked"].append(job)
