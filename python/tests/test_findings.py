@@ -223,6 +223,28 @@ class TestFindingsMarkdown:
         with pytest.raises(FindingsValidationError, match="missing required sections"):
             validate_findings_markdown(md)
 
+    def test_closing_fence_with_trailing_text_is_not_a_closer(self) -> None:
+        """A marker line with trailing text (e.g. an info string) cannot close a block."""
+        md = (
+            "# Hypothesis\n\ntest\n\n"
+            "# Method\n\ntest\n\n"
+            "```\n# Discoveries\n``` not a closing fence\n# Null results\n```\n\n"
+            "# Errors\n\ntest\n\n"
+            "# Evidence\n\ntest\n\n"
+            "# Attribution\n\ntest\n"
+        )
+        with pytest.raises(FindingsValidationError, match="missing required sections"):
+            validate_findings_markdown(md)
+
+    def test_heading_whitespace_cannot_span_lines(self) -> None:
+        """A `#` followed by a newline must not fabricate a heading from the next line."""
+        md = (
+            "#\nHypothesis\n#\nMethod\n#\nDiscoveries\n#\nNull results\n#\nErrors\n"
+            "#\nEvidence\n#\nAttribution\n"
+        )
+        with pytest.raises(FindingsValidationError, match="missing required sections"):
+            validate_findings_markdown(md)
+
     def test_headings_with_trailing_hashes(self) -> None:
         """ATX headings with optional closing hashes should be recognized."""
         md = (

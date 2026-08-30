@@ -33,8 +33,14 @@ REQUIRED_MD_SECTIONS: tuple[str, ...] = (
     "Attribution",
 )
 
-_HEADING_RE = re.compile(r"^ {0,3}(#{1,6})\s+(.+?)\s*$", re.MULTILINE)
-_FENCE_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})", re.MULTILINE)
+# `\s` here would also match newlines, letting `#\nfoo` span lines and fabricate
+# a heading from invalid Markdown, so only spaces/tabs separate the hashes.
+_HEADING_RE = re.compile(r"^ {0,3}(#{1,6})[ \t]+(.+?)[ \t]*$", re.MULTILINE)
+# Opening fences may carry an info string (```` ```python ````); closing fences
+# may only be followed by whitespace. Treating a marker line with trailing text
+# as a closer would end the block early and leak its headings as sections.
+_FENCE_OPEN_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})", re.MULTILINE)
+_FENCE_CLOSE_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})[ \t]*$", re.MULTILINE)
 
 
 class FindingType(StrEnum):
@@ -371,7 +377,8 @@ def _require_nonempty_str(raw: dict[str, Any], key: str) -> str:
 def _extract_headings_outside_code_blocks(text: str) -> set[str]:
     """Extract normalized ATX headings, ignoring those inside fenced code blocks."""
     # Find all fence positions
-    fences = list(_FENCE_RE.finditer(text))
+    fences = list(_FENCE_OPEN_RE.finditer(text))
+    closes = list(_FENCE_CLOSE_RE.finditer(text))
     code_block_ranges: list[tuple[int, int]] = []
 
     # Pair up fences to find code block ranges
@@ -382,18 +389,22 @@ def _extract_headings_outside_code_blocks(text: str) -> set[str]:
         fence_type = start_fence.group(1)[0]
         fence_length = len(start_fence.group(1))
 
-        # Find matching closing fence
-        j = i + 1
-        while j < len(fences):
-            if (
-                fences[j].group(1)[0] == fence_type
-                and len(fences[j].group(1)) >= fence_length
-            ):
-                end_pos = fences[j].end()
-                code_block_ranges.append((start_pos, end_pos))
-                i = j + 1
+        # Find matching closing fence: same marker type, at least the opener's
+        # length, and no trailing text after the marker.
+        close = None
+        for c in closes:
+            same_type = c.group(1)[0] == fence_type
+            long_enough = len(c.group(1)) >= fence_length
+            if c.start() > start_fence.end() and same_type and long_enough:
+                close = c
                 break
-            j += 1
+        if close is not None:
+            code_block_ranges.append((start_pos, close.end()))
+            # Resume after the closing fence; it must not be re-parsed as an
+            # opener of a new block.
+            i += 1
+            while i < len(fences) and fences[i].start() < close.end():
+                i += 1
         else:
             # No closing fence found, treat rest of document as code block
             code_block_ranges.append((start_pos, len(text)))
