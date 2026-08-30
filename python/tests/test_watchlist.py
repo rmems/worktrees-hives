@@ -113,7 +113,7 @@ class TestWatchlistAdd:
         assert job.branch == "feature/x"
         assert job.status == JobStatus.PENDING
         assert job.fix_count == 0
-        assert job.max_fixes == 3
+        assert job.max_fixes is None
 
     def test_add_with_options(self, watchlist: Watchlist) -> None:
         job = watchlist.add("j1", "acme", "repo", "br", stack_id="s1", max_fixes=3)
@@ -124,10 +124,9 @@ class TestWatchlistAdd:
         with pytest.raises(ValueError, match="max_fixes"):
             watchlist.add("j1", "acme", "repo", "br", max_fixes=-1)
 
-    def test_add_exceeds_safety_ceiling_raises(self, watchlist: Watchlist) -> None:
-        with pytest.raises(PolicyError, match="safety ceiling") as exc_info:
-            watchlist.add("j1", "acme", "repo", "br", max_fixes=5)
-        assert exc_info.value.code == "MAX_FIXES_CEILING"
+    def test_add_allows_large_max_fixes(self, watchlist: Watchlist) -> None:
+        job = watchlist.add("j1", "acme", "repo", "br", max_fixes=999)
+        assert job.max_fixes == 999
 
     def test_add_duplicate_raises(self, watchlist: Watchlist) -> None:
         watchlist.add("j1", "acme", "repo", "br")
@@ -154,7 +153,7 @@ class TestWatchlistAdd:
 
 
 class TestMaxFixesOnLoad:
-    def test_over_ceiling_max_fixes_clamped(self, state_path: Path) -> None:
+    def test_load_preserves_recorded_max_fixes(self, state_path: Path) -> None:
         state_path.write_text(
             json.dumps(
                 {
@@ -188,7 +187,7 @@ class TestMaxFixesOnLoad:
         w = Watchlist(state_path, allowed_owners=frozenset({"acme"}))
         high = w.get("high")
         assert high is not None
-        assert high.max_fixes == 3  # clamped to ceiling, not dropped
+        assert high.max_fixes == 99
         good = w.get("good")
         assert good is not None
         assert good.max_fixes == 2
@@ -271,12 +270,12 @@ class TestWatchlistFixCount:
         watchlist.add("j1", "acme", "repo", "br")
         job = watchlist.increment_fix_count("j1")
         assert job.fix_count == 1
-        assert job.fix_budget_remaining == 2
+        assert job.fix_budget_remaining is None
 
     def test_per_pr_budget_shared_across_jobs(self, watchlist: Watchlist) -> None:
-        """Two job_ids on the same PR share the 3-fix ceiling for a cycle."""
-        watchlist.add("a", "acme", "repo", "br")
-        watchlist.add("b", "acme", "repo", "br")
+        """Two job_ids on the same PR can share an explicit PR budget for a cycle."""
+        watchlist.add("a", "acme", "repo", "br", max_fixes=3)
+        watchlist.add("b", "acme", "repo", "br", max_fixes=3)
         watchlist.set_pr("a", 9, "https://example.com/pr/9")
         watchlist.set_pr("b", 9, "https://example.com/pr/9")
         watchlist.begin_babysit_cycle("c1")
@@ -292,20 +291,19 @@ class TestWatchlistFixCount:
         with pytest.raises(PolicyError, match="exhausted"):
             watchlist.increment_fix_count("j1")
 
-    def test_safety_ceiling_enforced_on_increment(
+    def test_large_in_memory_max_fixes_still_honors_in_memory_value(
         self, state_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Even if max_fixes were higher in memory, ceiling still caps increments."""
+        """A mutated in-memory max_fixes controls budget for subsequent increments."""
         monkeypatch.delenv("WH_ALLOWED_OWNERS", raising=False)
         w = Watchlist(state_path, allowed_owners=_TEST_OWNERS)
-        w.add("j1", "acme", "repo", "br", max_fixes=3)
+        w.add("j1", "acme", "repo", "br", max_fixes=4)
         job = w.get("j1")
         assert job is not None
-        # Simulate a corrupted in-memory max that still must hit the ceiling.
-        job.max_fixes = 10
-        for _ in range(3):
-            w.increment_fix_count("j1")
-        with pytest.raises(PolicyError, match=r"exhausted|ceiling"):
+        # Mutating max_fixes in-memory should be honored by subsequent increments.
+        job.max_fixes = 1
+        w.increment_fix_count("j1")
+        with pytest.raises(PolicyError, match=r"exhausted"):
             w.increment_fix_count("j1")
 
 
@@ -604,7 +602,7 @@ class TestMultiOwner:
 class TestCliPolicyExit:
     """CLI maps PolicyError to exit code 2."""
 
-    def test_add_max_fixes_policy_returns_2(
+    def test_add_negative_max_fixes_returns_1(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         from worktrees_hives.cli import main
@@ -621,10 +619,10 @@ class TestCliPolicyExit:
                 "repo",
                 "br",
                 "--max-fixes",
-                "4",
+                "-1",
             ]
         )
-        assert code == 2
+        assert code == 1
 
     def test_add_duplicate_returns_1(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from worktrees_hives.cli import main
@@ -803,8 +801,8 @@ class TestCliJsonEnvelopes:
         item = needs[0]
         assert item["residual_blockers"] == ["ruff", "review"]
         assert item["fix_count"] == 0
-        assert item["max_fixes"] == 3
-        assert item["fix_budget_remaining"] == 3
+        assert item["max_fixes"] is None
+        assert item["fix_budget_remaining"] is None
 
     def test_json_add_includes_stack_id(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]

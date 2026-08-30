@@ -27,7 +27,7 @@ Abort and report if any of these fail:
 - Any required quality gate fails or times out
 - A deny-listed command would be required (merge, bare `--force` / `-f`)
 - `git push` exits non-zero or the remote rejects the push
-- This is already a babysit cycle and the 3 code-fix commit cap is exhausted
+- This is already a babysit cycle with an explicitly configured code-fix budget that is exhausted
 
 ## Stages
 

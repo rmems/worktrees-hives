@@ -116,10 +116,34 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e "./python[dev]"
 
-      - name: Run tests
+      - name: Install coverage tooling
+        run: python -m pip install pytest-cov
+
+      - name: Run tests with coverage
         env:
           WH_BIN: ${{ needs.check-python-pkg.outputs.has-cargo == 'true' && format('{0}/target/release/wh', github.workspace) || '' }}
-        run: python -m pytest python/tests/ -v --tb=short
+        run: >
+          python -m pytest python/tests/ -v --tb=short
+          --cov=python/src
+          --cov-report=xml:python/coverage.xml
+          --junitxml=junit.xml
+          -o junit_family=legacy
+          --cov-report=term-missing
+
+      - name: Upload coverage
+        uses: codecov/codecov-action@v5
+        with:
+          files: ./python/coverage.xml
+          flags: python
+          name: python
+          fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}
+
+      - name: Upload test results to Codecov
+        if: ${{ !cancelled() }}
+        uses: codecov/test-results-action@v1
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
 
   # macOS/Windows: billable minutes — push to main only (not pull_request).
   test-main-platforms:

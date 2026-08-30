@@ -49,7 +49,7 @@ These rules apply to every agent, platform, and command path:
 - Force pushes may use only `--force-with-lease`; bare `--force` and `-f` are forbidden.
 - Each job edits only its assigned branch and isolated worktree.
 - Mutating operations must verify the expected job branch and remain inside the configured path sandbox.
-- A babysit cycle may create at most **three code-fix commits per PR**. Review replies are not capped.
+- A babysit cycle has no fixed code-fix commit limit; callers may set `--max-fixes` when a finite budget is needed. Review replies are not capped.
 - Stacked pull requests are handled from the bottom of the stack upward.
 - Review replies are posted only after the fix is pushed and include the pushed SHA plus attribution, for example: `Grok Build agent: fixed in abc1234`.
 

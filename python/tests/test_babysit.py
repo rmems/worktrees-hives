@@ -14,7 +14,6 @@ import pytest
 
 from worktrees_hives.babysit import (
     ALLOWED_OWNERS,
-    MAX_FIX_COMMITS_PER_CYCLE,
     BabysitCycle,
     BabysitResult,
     CheckRun,
@@ -694,7 +693,7 @@ class TestBabysitCycle:
     @patch("worktrees_hives.babysit.fetch_review_threads")
     @patch("worktrees_hives.babysit.fetch_pr_checks", return_value=[])
     @patch("worktrees_hives.babysit.fetch_pr_status")
-    def test_fix_cap_enforced(
+def test_configured_fix_budget_enforced(
         self,
         mock_status: MagicMock,
         mock_checks: MagicMock,
@@ -958,9 +957,6 @@ class TestBabysitMultiple:
 
 
 class TestConstants:
-    def test_max_fix_commits(self) -> None:
-        assert MAX_FIX_COMMITS_PER_CYCLE == 3
-
     def test_default_attribution(self) -> None:
         from worktrees_hives.babysit import DEFAULT_ATTRIBUTION
 

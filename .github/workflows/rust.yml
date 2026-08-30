@@ -50,8 +50,20 @@ jobs:
       - name: Cache Cargo artifacts
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
 
-      - name: Run tests
-        run: cargo test --workspace
+      - name: Install cargo-llvm-cov
+        run: cargo install cargo-llvm-cov
+
+      - name: Generate Rust coverage
+        run: cargo llvm-cov --workspace --lcov --output-path coverage.lcov
+
+      - name: Upload coverage
+        uses: codecov/codecov-action@v5
+        with:
+          files: ./coverage.lcov
+          flags: rust
+          name: rust
+          fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}
 
   # macOS/Windows burn billable minutes — only on push to main (not PRs).
   # Do not use matrix in job-level `if` (invalid / workflow fails immediately).

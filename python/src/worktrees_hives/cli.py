@@ -12,7 +12,7 @@ import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from worktrees_hives.babysit import DEFAULT_ATTRIBUTION, MAX_FIX_COMMITS_PER_CYCLE
+from worktrees_hives.babysit import DEFAULT_ATTRIBUTION
 from worktrees_hives.bridge import WhClient
 from worktrees_hives.discover import OwnerPolicyError
 from worktrees_hives.errors import FindingsValidationError, PolicyError
@@ -41,7 +41,8 @@ def _print_job(job: JobState) -> None:
         print(f"    PR: {job.pr_url}")
     if job.residual_blockers:
         print(f"    Blockers: {', '.join(job.residual_blockers)}")
-    print(f"    Fixes: {job.fix_count}/{job.max_fixes}")
+    budget = "unlimited" if job.max_fixes is None else str(job.max_fixes)
+    print(f"    Fixes: {job.fix_count}/{budget}")
 
 
 def _watchlist_from_args(args: argparse.Namespace) -> Watchlist:
@@ -523,16 +524,9 @@ def cmd_babysit(args: argparse.Namespace) -> int:
     def run() -> int:
         from worktrees_hives.babysit import assert_owner_allowed, babysit_multiple
 
-        if not 0 <= args.max_fixes <= MAX_FIX_COMMITS_PER_CYCLE:
-            raise PolicyError(
-                "MAX_FIXES_CEILING",
-                f"--max-fixes {args.max_fixes} is outside the allowed range "
-                f"0-{MAX_FIX_COMMITS_PER_CYCLE} (AGENTS.md safety cap).",
-            )
-
         pr_numbers = list(args.pr_numbers)
         # argparse type=int accepts 0/negatives; each entry is a separate cycle
-        # with a fresh fix budget, so duplicates would also re-spend the cap.
+        # with a fresh configured budget, so duplicates would also re-spend it.
         if any(n <= 0 for n in pr_numbers):
             raise ValueError(f"PR numbers must be positive integers, got {pr_numbers}")
         if len(pr_numbers) != len(set(pr_numbers)):
@@ -570,7 +564,10 @@ def cmd_babysit(args: argparse.Namespace) -> int:
 
         for result in results:
             print(f"\nPR #{result.pr_number}: {result.state.value}")
-            print(f"  Fixes applied: {result.fix_commits_used}/{args.max_fixes}")
+            if args.max_fixes is None:
+                print(f"  Fixes applied: {result.fix_commits_used}/unlimited")
+            else:
+                print(f"  Fixes applied: {result.fix_commits_used}/{args.max_fixes}")
             print(
                 f"  Threads resolved: {result.threads_resolved}, "
                 f"remaining: {result.threads_remaining}"
@@ -707,7 +704,12 @@ def main(argv: list[str] | None = None) -> int:
     add_p.add_argument("repo", help="Repository name")
     add_p.add_argument("branch", help="Branch name")
     add_p.add_argument("--stack-id", help="Stack membership identifier")
-    add_p.add_argument("--max-fixes", type=int, default=3, help="Max fix commits (default: 3)")
+    add_p.add_argument(
+        "--max-fixes",
+        type=int,
+        default=None,
+        help="Max fix commits (default: unlimited)",
+    )
 
     # watchlist remove
     rm_p = wl_sub.add_parser("remove", help="Remove a job from the watchlist")
@@ -800,8 +802,8 @@ def main(argv: list[str] | None = None) -> int:
     baby_p.add_argument(
         "--max-fixes",
         type=int,
-        default=MAX_FIX_COMMITS_PER_CYCLE,
-        help=f"Max code-fix commits per PR per cycle (default: {MAX_FIX_COMMITS_PER_CYCLE})",
+        default=None,
+        help="Max code-fix commits per PR per cycle (default: unlimited)",
     )
     baby_p.add_argument(
         "--attribution",
