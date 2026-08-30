@@ -21,6 +21,8 @@ from worktrees_hives.issue_to_pr import (
     _is_forbidden_merge_cmd,
 )
 
+TEST_COMMIT = "a" * 40
+
 
 class TestIsForbiddenMergeCmd:
     """Structural never-merge guard must not scan metadata strings."""
@@ -61,13 +63,22 @@ class TestIsForbiddenMergeCmd:
 # ---------------------------------------------------------------------------
 
 
-def _success_response(command: str = "cli.worktree.create") -> SuccessResponse:
-    return SuccessResponse(command=command, data={}, schema_version=1)
+def _success_response(
+    command: str = "worktree.create",
+    *,
+    start_commit: object = TEST_COMMIT,
+    head_commit: object = TEST_COMMIT,
+) -> SuccessResponse:
+    return SuccessResponse(
+        command=command,
+        data={"start_commit": start_commit, "head_commit": head_commit},
+        schema_version=1,
+    )
 
 
 def _error_response(code: str = "E001", message: str = "something broke") -> ErrorResponse:
     return ErrorResponse(
-        command="cli.worktree.create",
+        command="worktree.create",
         error=ErrorData(code=code, message=message),
         schema_version=1,
     )
@@ -167,6 +178,7 @@ class TestIssueToPrHappyPath:
         assert result.pr_number == 42
         assert "pull/42" in result.pr_url
         assert orch.step == Step.PR_OPENED
+        assert result.start_commit == TEST_COMMIT
 
     @patch("worktrees_hives.issue_to_pr.subprocess.run")
     def test_pr_body_contains_closes_link(self, mock_run):
@@ -243,6 +255,50 @@ class TestIssueToPrStepFailures:
         orch = IssueToPr(config=cfg, wh_client=mock_wh)
         with pytest.raises(IssueToPrError, match="wh returned error"):
             orch.run()
+
+    @pytest.mark.parametrize(
+        ("start_commit", "head_commit", "message"),
+        [
+            (None, TEST_COMMIT, "start_commit"),
+            ("malformed", TEST_COMMIT, "start_commit"),
+            (TEST_COMMIT, "b" * 40, "does not equal"),
+        ],
+    )
+    @patch("worktrees_hives.issue_to_pr.subprocess.run")
+    def test_rejects_invalid_commit_identity_response(
+        self,
+        mock_run,
+        start_commit: object,
+        head_commit: object,
+        message: str,
+    ) -> None:
+        mock_wh = MagicMock()
+        mock_wh.run.return_value = _success_response(
+            start_commit=start_commit, head_commit=head_commit
+        )
+        with pytest.raises(IssueToPrError, match=message):
+            IssueToPr(config=_make_config(), wh_client=mock_wh).run()
+        mock_run.assert_not_called()
+
+    @patch("worktrees_hives.issue_to_pr.subprocess.run")
+    def test_full_sha_response_must_match_request(self, mock_run) -> None:
+        mock_wh = MagicMock()
+        mock_wh.run.return_value = _success_response(start_commit="b" * 40, head_commit="b" * 40)
+        with pytest.raises(IssueToPrError, match="requested full object id"):
+            IssueToPr(config=_make_config(start_point=TEST_COMMIT), wh_client=mock_wh).run()
+        mock_run.assert_not_called()
+
+    @patch("worktrees_hives.issue_to_pr.subprocess.run")
+    def test_full_sha_response_exact_match_is_accepted(self, mock_run) -> None:
+        mock_wh = MagicMock()
+        mock_wh.run.return_value = _success_response()
+        mock_run.side_effect = _happy_side_effect()
+        result = IssueToPr(config=_make_config(start_point=TEST_COMMIT), wh_client=mock_wh).run()
+        assert result.start_commit == TEST_COMMIT
+
+    def test_rejects_abbreviated_sha_request(self) -> None:
+        with pytest.raises(IssueToPrError, match="full lowercase"):
+            IssueToPr(config=_make_config(start_point="abc1234"), wh_client=MagicMock())
 
     @patch("worktrees_hives.issue_to_pr.subprocess.run")
     def test_git_push_failure(self, mock_run):

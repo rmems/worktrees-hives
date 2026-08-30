@@ -27,14 +27,24 @@ from worktrees_hives.paths import default_worktree_base
 
 TEST_OWNER = "acme"
 TEST_REPO = "example-repo"
+TEST_COMMIT = "a" * 40
 
 
 def _ok_create(
-    path: str = "/tmp/wt/acme/example-repo/gh-1", branch: str = "hive/gh-1"
+    path: str = "/tmp/wt/acme/example-repo/gh-1",
+    branch: str = "hive/gh-1",
+    start_commit: object = TEST_COMMIT,
+    head_commit: object = TEST_COMMIT,
 ) -> SuccessResponse:
     return SuccessResponse(
         command="worktree.create",
-        data={"path": path, "branch": branch, "repo_root": "/tmp/repo"},
+        data={
+            "path": path,
+            "branch": branch,
+            "repo_root": "/tmp/repo",
+            "start_commit": start_commit,
+            "head_commit": head_commit,
+        },
         schema_version=1,
     )
 
@@ -144,6 +154,7 @@ class TestClaimIssue:
         assert result.issue_number == 8
         assert result.owns_branch is True
         assert result.worktree_path == path
+        assert result.start_commit == TEST_COMMIT
         args = wh.run.call_args[0]
         assert args[0:3] == ("worktree", "create", "--repo")
         assert args[3] == os.path.abspath("/tmp/repo")
@@ -182,14 +193,15 @@ class TestClaimPr:
             TEST_REPO,
             9,
             head_branch="feature/pr-head",
-            head_sha="abc1234",
+            head_sha=TEST_COMMIT,
         )
         assert result.pr_number == 9
         assert result.job_id == "pr-9"
         assert result.owns_branch is False
         assert result.branch == "feature/pr-head"
+        assert result.start_commit == TEST_COMMIT
         args = wh.run.call_args[0]
-        assert args[4:6] == ("--start-point", "abc1234")
+        assert args[4:6] == ("--start-point", TEST_COMMIT)
         assert args[-1] == "feature/pr-head"
         assert args[-2] == "pr-9"
 
@@ -198,6 +210,44 @@ class TestClaimPr:
         with pytest.raises(ClaimError, match="head_sha"):
             mgr.claim_pr(TEST_OWNER, TEST_REPO, 1, head_branch="feat", head_sha="not-hex!!")
         wh.run.assert_not_called()
+
+    def test_rejects_abbreviated_sha(self):
+        mgr, wh = _manager()
+        with pytest.raises(ClaimError, match="head_sha"):
+            mgr.claim_pr(TEST_OWNER, TEST_REPO, 1, head_branch="feat", head_sha="abc1234")
+        wh.run.assert_not_called()
+
+    def test_full_sha_response_must_match_request(self):
+        mgr, wh = _manager()
+        wh.run.return_value = _ok_create(
+            branch="feature/pr-head", start_commit="b" * 40, head_commit="b" * 40
+        )
+        with pytest.raises(ClaimError, match="requested full object id"):
+            mgr.claim_pr(
+                TEST_OWNER,
+                TEST_REPO,
+                9,
+                head_branch="feature/pr-head",
+                head_sha=TEST_COMMIT,
+            )
+
+
+class TestVerifiedCommitResponse:
+    @pytest.mark.parametrize(
+        ("start_commit", "head_commit", "message"),
+        [
+            (None, TEST_COMMIT, "start_commit"),
+            ("not-a-sha", TEST_COMMIT, "start_commit"),
+            (TEST_COMMIT, "b" * 40, "does not equal"),
+        ],
+    )
+    def test_missing_malformed_or_mismatched_response(
+        self, start_commit: object, head_commit: object, message: str
+    ) -> None:
+        mgr, wh = _manager()
+        wh.run.return_value = _ok_create(start_commit=start_commit, head_commit=head_commit)
+        with pytest.raises(ClaimError, match=message):
+            mgr.claim_issue(TEST_OWNER, TEST_REPO, 1, base_ref="origin/main")
 
 
 # ---------------------------------------------------------------------------

@@ -6,7 +6,7 @@ The Rust `wh` envelope remains independently versioned at schema version 1. The 
 
 ## Envelope Structure
 
-All `--json` responses follow this schema:
+After command-line parsing succeeds, all `--json` responses follow this schema:
 
 ```json
 {
@@ -49,6 +49,23 @@ Standard error codes:
 - `WhProcessError` — `wh` exited with non-zero status
 - `WhJsonDecodeError` — Stdout was not valid JSON
 - `WhSchemaError` — JSON did not match v1 envelope
+- `WORKTREE_RESUME_UNPROVEN` — An existing branch cannot be safely identified as this job
+- `WORKTREE_POSTCONDITION_FAILED` — The created worktree/ref/HEAD identity changed or disagreed
+- `WORKTREE_CREATE_FAILED` — Git creation failed and residual state is reported in the message
+
+`--json` is a dispatched-command contract. Errors raised by the clap parser before
+dispatch (for example, a missing required argument, an unknown option, `--help`, or
+`--version`) remain clap's human-readable stderr output and exit code; they are not v1
+JSON envelopes. Once `worktree.create` dispatches, policy failures use exit code 2 and
+operational failures (including an invalid/unresolvable start point) use exit code 1,
+with an `ok:false` envelope on stdout.
+
+If Git may have left a branch or worktree registration behind, the failure
+envelope's additive `data` fields report `path`, `branch`, `path_exists`,
+`branch_commit`, `head_commit`, `worktree_registered`, and
+`cleanup_performed:false`. The operation deliberately does not delete residual
+state whose ownership could have been concurrently adopted; callers must stop
+and surface it for explicit reconciliation.
 
 ## Commands
 
@@ -94,11 +111,18 @@ prove a durable resume identity.
     "path": "/home/user/.local/share/worktrees-hives/worktrees/acme/example-repo/wh-123",
     "branch": "feature/fix",
     "repo_root": "/path/to/repo",
-    "start_commit": "0123456789abcdef0123456789abcdef01234567"
+    "start_commit": "0123456789abcdef0123456789abcdef01234567",
+    "head_commit": "0123456789abcdef0123456789abcdef01234567"
   },
   "error": null
 }
 ```
+
+`start_commit` is the canonical commit to which the caller's start point resolved.
+`head_commit` is independently read from the completed worker and must equal
+`start_commit`. Python orchestration consumers require both fields. All-hex caller
+start points must be full lowercase SHA-1 (40 characters) or SHA-256 (64 characters);
+abbreviated object ids are rejected, while symbolic refs are resolved by Rust.
 
 #### `worktree.list`
 

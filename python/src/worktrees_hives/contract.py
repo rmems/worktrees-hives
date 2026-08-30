@@ -2,11 +2,71 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any
 
 # Schema version must match wh-core contract::SCHEMA_VERSION.
 SCHEMA_VERSION: int = 1
+
+_CANONICAL_COMMIT_RE = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
+_HEX_START_POINT_RE = re.compile(r"^[0-9a-fA-F]+$")
+
+
+def validate_canonical_commit(value: object, *, field_name: str) -> str:
+    """Return a canonical full object id or raise ``WhSchemaError``."""
+    from worktrees_hives.errors import WhSchemaError
+
+    if not isinstance(value, str) or not _CANONICAL_COMMIT_RE.fullmatch(value):
+        raise WhSchemaError(
+            f"{field_name} must be a canonical lowercase 40- or 64-character commit id"
+        )
+    return value
+
+
+def validate_start_point_request(start_point: str) -> None:
+    """Reject ambiguous abbreviated object ids while allowing symbolic refs.
+
+    A caller-supplied all-hex value is interpreted as an object id and must be
+    a full SHA-1 or SHA-256 id. Symbolic refs are resolved by the Rust boundary.
+    """
+    from worktrees_hives.errors import WhSchemaError
+
+    if _HEX_START_POINT_RE.fullmatch(start_point) and not _CANONICAL_COMMIT_RE.fullmatch(
+        start_point
+    ):
+        raise WhSchemaError(
+            "all-hex start_point must be a full lowercase 40- or 64-character object id"
+        )
+
+
+def require_verified_worktree_commits(data: dict[str, Any], *, requested_start_point: str) -> str:
+    """Validate and return the Rust-verified worktree commit identity.
+
+    Both additive v1 fields are mandatory for worktree-create consumers. The
+    verified worker HEAD must exactly equal the resolved start commit. When the
+    request itself was a full object id, the response must equal it exactly;
+    symbolic refs are intentionally compared only after Rust resolves them.
+    """
+    from worktrees_hives.errors import WhSchemaError
+
+    validate_start_point_request(requested_start_point)
+    start_commit = validate_canonical_commit(
+        data.get("start_commit"), field_name="worktree.create data.start_commit"
+    )
+    head_commit = validate_canonical_commit(
+        data.get("head_commit"), field_name="worktree.create data.head_commit"
+    )
+    if head_commit != start_commit:
+        raise WhSchemaError("worktree.create verified head_commit does not equal start_commit")
+    if (
+        _CANONICAL_COMMIT_RE.fullmatch(requested_start_point)
+        and start_commit != requested_start_point
+    ):
+        raise WhSchemaError(
+            "worktree.create start_commit does not equal the requested full object id"
+        )
+    return start_commit
 
 
 @dataclass(frozen=True, slots=True)

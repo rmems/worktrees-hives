@@ -7,6 +7,32 @@ use std::path::PathBuf;
 /// Result alias for core operations.
 pub type Result<T> = std::result::Result<T, Error>;
 
+/// Residual state captured after a failed atomic worktree-add transaction.
+#[derive(Debug)]
+pub struct WorktreeCreationFailure {
+    pub path: PathBuf,
+    pub branch: String,
+    pub path_exists: bool,
+    pub branch_commit: Option<String>,
+    pub head_commit: Option<String>,
+    pub worktree_registered: bool,
+    pub stderr: String,
+}
+
+/// Exact-identity postcondition failure and the residual state left in place.
+#[derive(Debug)]
+pub struct WorktreePostconditionFailure {
+    pub path: PathBuf,
+    pub branch: String,
+    pub expected_commit: String,
+    pub actual_branch: Option<String>,
+    pub path_exists: bool,
+    pub branch_commit: Option<String>,
+    pub head_commit: Option<String>,
+    pub worktree_registered: bool,
+    pub reason: String,
+}
+
 /// Errors returned by core primitives.
 #[derive(Debug)]
 pub enum Error {
@@ -25,6 +51,10 @@ pub enum Error {
     },
     /// A git subprocess command failed.
     GitCommand { args: Vec<String>, stderr: String },
+    /// A worktree create transaction failed and may have left residual state.
+    WorktreeCreationFailed(Box<WorktreeCreationFailure>),
+    /// Creation completed but its exact branch/ref/HEAD identity was not preserved.
+    WorktreePostconditionFailed(Box<WorktreePostconditionFailure>),
     /// A git or gh command was blocked by safety policy.
     PolicyViolation {
         /// Machine-readable policy error code.
@@ -106,6 +136,56 @@ impl Display for Error {
                     stderr.trim()
                 )
             }
+            Self::WorktreeCreationFailed(failure) => {
+                let WorktreeCreationFailure {
+                    path,
+                    branch,
+                    path_exists,
+                    branch_commit,
+                    head_commit,
+                    worktree_registered,
+                    stderr,
+                } = failure.as_ref();
+                write!(
+                    f,
+                    "worktree creation failed for branch `{branch}` at `{}`: {}; residual_state \
+                 path_exists={} registered={} branch_commit={} head_commit={}; automatic cleanup \
+                 skipped because concurrent adoption cannot be disproven",
+                    path.display(),
+                    stderr.trim(),
+                    path_exists,
+                    worktree_registered,
+                    branch_commit.as_deref().unwrap_or("<absent>"),
+                    head_commit.as_deref().unwrap_or("<absent>")
+                )
+            }
+            Self::WorktreePostconditionFailed(failure) => {
+                let WorktreePostconditionFailure {
+                    path,
+                    branch,
+                    expected_commit,
+                    actual_branch,
+                    path_exists,
+                    branch_commit,
+                    head_commit,
+                    worktree_registered,
+                    reason,
+                } = failure.as_ref();
+                write!(
+                    f,
+                    "worktree postcondition failed for branch `{branch}` at `{}`: expected_commit={} \
+                 actual_branch={} reason={reason}; residual_state path_exists={} registered={} \
+                 branch_commit={} head_commit={}; automatic cleanup skipped because concurrent \
+                 adoption cannot be disproven",
+                    path.display(),
+                    expected_commit,
+                    actual_branch.as_deref().unwrap_or("<unavailable>"),
+                    path_exists,
+                    worktree_registered,
+                    branch_commit.as_deref().unwrap_or("<absent>"),
+                    head_commit.as_deref().unwrap_or("<absent>")
+                )
+            }
             Self::PolicyViolation { code, message } => {
                 write!(f, "policy violation [{code}]: {message}")
             }
@@ -118,6 +198,31 @@ impl std::error::Error for Error {
         match self {
             Self::Io { source, .. } => Some(source),
             _ => None,
+        }
+    }
+}
+
+impl Error {
+    /// Stable error code for JSON command envelopes.
+    #[must_use]
+    pub const fn code(&self) -> &'static str {
+        match self {
+            Self::InvalidSegment { .. } => "INVALID_SEGMENT",
+            Self::SandboxViolation { .. } => "SANDBOX_VIOLATION",
+            Self::Io { .. } => "IO_ERROR",
+            Self::GitCommand { .. } => "GIT_COMMAND_FAILED",
+            Self::WorktreeCreationFailed(_) => "WORKTREE_CREATE_FAILED",
+            Self::WorktreePostconditionFailed(_) => "WORKTREE_POSTCONDITION_FAILED",
+            Self::PolicyViolation { code, .. } => code.as_str(),
+        }
+    }
+
+    /// Process exit code used by the CLI boundary.
+    #[must_use]
+    pub const fn exit_code(&self) -> u8 {
+        match self {
+            Self::PolicyViolation { .. } | Self::WorktreePostconditionFailed(_) => 2,
+            _ => 1,
         }
     }
 }

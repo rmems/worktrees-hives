@@ -25,7 +25,11 @@ from enum import StrEnum
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
 from worktrees_hives.bridge import WhClient
-from worktrees_hives.contract import SuccessResponse
+from worktrees_hives.contract import (
+    SuccessResponse,
+    require_verified_worktree_commits,
+    validate_start_point_request,
+)
 from worktrees_hives.errors import WhError
 from worktrees_hives.paths import default_worktree_base as _default_worktree_base
 
@@ -127,6 +131,7 @@ class IssueToPrResult:
     worktree_path: str
     pr_number: int
     pr_url: str
+    start_commit: str
 
 
 # ---------------------------------------------------------------------------
@@ -211,6 +216,10 @@ class IssueToPr:
         _validate_remote_name(config.remote)
         _validate_branch_name("base_branch", config.base_branch)
         _validate_branch_name("start_point", config.start_point)
+        try:
+            validate_start_point_request(config.start_point)
+        except WhError as exc:
+            raise IssueToPrError(Step.INIT, f"invalid start_point: {exc}") from exc
         _validate_path_segment("owner", config.owner)
         _validate_path_segment("repo", config.repo)
         if config.issue_number <= 0:
@@ -237,7 +246,7 @@ class IssueToPr:
         branch_name = self._branch_name()
         worktree_path = self._worktree_path()
 
-        self._create_worktree(branch_name, worktree_path)
+        start_commit = self._create_worktree(branch_name, worktree_path)
         self._push_branch(branch_name, worktree_path)
         pr_number, pr_url = self._open_pr(branch_name)
 
@@ -246,11 +255,12 @@ class IssueToPr:
             worktree_path=worktree_path,
             pr_number=pr_number,
             pr_url=pr_url,
+            start_commit=start_commit,
         )
 
     # -- step implementations -----------------------------------------------
 
-    def _create_worktree(self, branch_name: str, worktree_path: str) -> None:
+    def _create_worktree(self, branch_name: str, worktree_path: str) -> str:
         """Ask ``wh`` to create an isolated worktree and branch.
 
         The Rust boundary resolves ``start_point`` to a commit and creates the
@@ -279,9 +289,19 @@ class IssueToPr:
             raise IssueToPrError(Step.INIT, str(exc)) from exc
 
         if isinstance(resp, SuccessResponse):
+            try:
+                start_commit = require_verified_worktree_commits(
+                    resp.data, requested_start_point=self._cfg.start_point
+                )
+            except WhError as exc:
+                self._step = Step.FAILED
+                raise IssueToPrError(
+                    Step.INIT, f"invalid wh worktree.create response: {exc}"
+                ) from exc
             self._step = Step.WORKTREE_CREATED
             # Prefer path from response when present; keep derived for callers.
             _ = worktree_path
+            return start_commit
         else:
             self._step = Step.FAILED
             raise IssueToPrError(

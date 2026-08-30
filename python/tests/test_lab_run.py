@@ -340,9 +340,12 @@ class TestCliLabRun:
         write_findings_pair(_report(str(wt)), *findings_paths(wt))
         job = _job(str(wt))
 
+        forwarded: dict[str, object] = {}
+
         def fake_run(manager, **kwargs):
             from worktrees_hives.lab_run import LabRunResult
 
+            forwarded.update(kwargs)
             return LabRunResult(
                 job=job,
                 report=_report(str(wt)),
@@ -381,6 +384,7 @@ class TestCliLabRun:
         assert env["schema_version"] == 2
         assert env["command"] == "lab.run"
         assert env["data"]["job_id"] == job.job_id
+        assert forwarded["start_point"] == "origin/main"
 
     def test_policy_denied_command_exit_2(self, monkeypatch, capsys) -> None:
         monkeypatch.setattr("worktrees_hives.cli.WhClient", MagicMock)

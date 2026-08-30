@@ -25,7 +25,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from worktrees_hives.contract import ErrorResponse, SuccessResponse
+from worktrees_hives.contract import (
+    ErrorResponse,
+    SuccessResponse,
+    require_verified_worktree_commits,
+    validate_start_point_request,
+)
 from worktrees_hives.errors import (
     PolicyError,
     WhBinaryNotFoundError,
@@ -44,7 +49,7 @@ _SEGMENT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 # Branch / ref: plain git-ish names, no leading dash.
 _REF_RE = re.compile(r"^(?!-)[A-Za-z0-9][A-Za-z0-9._/-]*$")
 # Commit id supplied by the caller for an exact PR-head start point.
-_SHA_RE = re.compile(r"^[0-9a-fA-F]{7,40}$")
+_SHA_RE = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
 
 
 def _load_allowed_owners_from_env() -> frozenset[str]:
@@ -82,6 +87,8 @@ class ClaimResult:
     pr_number: int | None = None
     # True when this claim owns the branch name (issue path).
     owns_branch: bool = True
+    # Exact commit resolved and verified by the Rust worktree boundary.
+    start_commit: str | None = None
 
 
 @dataclass
@@ -131,6 +138,7 @@ class ClaimManager:
         if issue_number <= 0:
             raise ClaimError(f"issue_number must be positive, got {issue_number}")
         _validate_ref("base_ref", base_ref)
+        _validate_start_point("base_ref", base_ref)
         _validate_segment("owner", owner)
         _validate_segment("repo", repo)
         self._assert_owner_allowed(owner)
@@ -141,7 +149,7 @@ class ClaimManager:
         worktree_path = self.derive_path(owner, repo, job_id)
         self._assert_not_exists(worktree_path)
 
-        path, returned_branch = self._wh_create(owner, repo, job_id, branch, base_ref)
+        path, returned_branch, start_commit = self._wh_create(owner, repo, job_id, branch, base_ref)
         self._check_isolation(path, returned_branch, branch)
 
         return ClaimResult(
@@ -152,6 +160,7 @@ class ClaimManager:
             worktree_path=path,
             issue_number=issue_number,
             owns_branch=True,
+            start_commit=start_commit,
         )
 
     def claim_pr(
@@ -185,7 +194,9 @@ class ClaimManager:
         worktree_path = self.derive_path(owner, repo, job_id)
         self._assert_not_exists(worktree_path)
 
-        path, returned_branch = self._wh_create(owner, repo, job_id, head_branch, head_sha)
+        path, returned_branch, start_commit = self._wh_create(
+            owner, repo, job_id, head_branch, head_sha
+        )
         self._check_isolation(path, returned_branch, head_branch)
 
         return ClaimResult(
@@ -196,6 +207,7 @@ class ClaimManager:
             worktree_path=path,
             pr_number=pr_number,
             owns_branch=False,
+            start_commit=start_commit,
         )
 
     def cleanup(
@@ -246,8 +258,8 @@ class ClaimManager:
         job_id: str,
         branch: str,
         start_point: str,
-    ) -> tuple[str, str]:
-        """Invoke ``wh worktree create --repo …``; return (path, branch)."""
+    ) -> tuple[str, str, str]:
+        """Invoke ``wh worktree create`` and return path, branch, exact commit."""
         resp = self._wh_run(
             "worktree",
             "create",
@@ -262,6 +274,12 @@ class ClaimManager:
         )
         if not isinstance(resp, SuccessResponse):
             raise ClaimError(f"wh worktree create failed: {resp.error.code}: {resp.error.message}")
+        try:
+            start_commit = require_verified_worktree_commits(
+                resp.data, requested_start_point=start_point
+            )
+        except WhError as exc:
+            raise ClaimError(f"invalid wh worktree.create response: {exc}") from exc
         path = resp.data.get("path")
         ret_branch = resp.data.get("branch")
         if not isinstance(path, str) or not path:
@@ -269,7 +287,7 @@ class ClaimManager:
             path = self.derive_path(owner, repo, job_id)
         if not isinstance(ret_branch, str) or not ret_branch:
             ret_branch = branch
-        return path, ret_branch
+        return path, ret_branch, start_commit
 
     def _wh_run(self, *args: str) -> SuccessResponse | ErrorResponse:
         try:
@@ -334,3 +352,10 @@ def _validate_ref(field_name: str, value: str) -> None:
         raise ClaimError(
             f"Invalid {field_name} {value!r}: must be a plain git ref, not empty or option-looking"
         )
+
+
+def _validate_start_point(field_name: str, value: str) -> None:
+    try:
+        validate_start_point_request(value)
+    except WhError as exc:
+        raise ClaimError(f"invalid {field_name}: {exc}") from exc

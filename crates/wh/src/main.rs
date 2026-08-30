@@ -124,16 +124,93 @@ enum SupervisorAction {
 #[tokio::main]
 async fn main() -> ExitCode {
     let cli = Cli::parse();
+    let json = cli.json;
+    let worktree_command = worktree_command_name(&cli);
 
     match run(cli, &mut io::stdout()).await {
         Ok(code) => code,
         Err(error) => {
-            let _ = writeln!(io::stderr(), "wh: {error}");
-            match &error {
-                wh_core::error::Error::PolicyViolation { .. } => ExitCode::from(2),
-                _ => ExitCode::FAILURE,
+            if json && let Some(command) = worktree_command {
+                let response = wh_core::contract::Response {
+                    ok: false,
+                    schema_version: wh_core::contract::SCHEMA_VERSION,
+                    command,
+                    data: worktree_error_data(&error),
+                    error: Some(wh_core::contract::ErrorData {
+                        code: error.code().to_owned(),
+                        message: error.to_string(),
+                    }),
+                };
+                let mut stdout = io::stdout();
+                if serde_json::to_writer(&mut stdout, &response).is_ok() {
+                    let _ = stdout.write_all(b"\n");
+                }
             }
+            let _ = writeln!(io::stderr(), "wh: {error}");
+            ExitCode::from(error.exit_code())
         }
+    }
+}
+
+fn worktree_error_data(error: &wh_core::error::Error) -> serde_json::Value {
+    match error {
+        wh_core::error::Error::WorktreeCreationFailed(failure) => {
+            let wh_core::error::WorktreeCreationFailure {
+                path,
+                branch,
+                path_exists,
+                branch_commit,
+                head_commit,
+                worktree_registered,
+                ..
+            } = failure.as_ref();
+            serde_json::json!({
+            "path": path,
+            "branch": branch,
+            "path_exists": path_exists,
+            "branch_commit": branch_commit,
+            "head_commit": head_commit,
+            "worktree_registered": worktree_registered,
+            "cleanup_performed": false,
+            })
+        }
+        wh_core::error::Error::WorktreePostconditionFailed(failure) => {
+            let wh_core::error::WorktreePostconditionFailure {
+                path,
+                branch,
+                expected_commit,
+                actual_branch,
+                path_exists,
+                branch_commit,
+                head_commit,
+                worktree_registered,
+                ..
+            } = failure.as_ref();
+            serde_json::json!({
+            "path": path,
+            "branch": branch,
+            "expected_commit": expected_commit,
+            "actual_branch": actual_branch,
+            "path_exists": path_exists,
+            "branch_commit": branch_commit,
+            "head_commit": head_commit,
+            "worktree_registered": worktree_registered,
+            "cleanup_performed": false,
+            })
+        }
+        _ => serde_json::json!({}),
+    }
+}
+
+fn worktree_command_name(cli: &Cli) -> Option<&'static str> {
+    match &cli.command {
+        Some(Command::Worktree { action }) => Some(match action {
+            WorktreeAction::Create { .. } => "worktree.create",
+            WorktreeAction::List => "worktree.list",
+            WorktreeAction::Remove { .. } => "worktree.remove",
+            WorktreeAction::Prune { .. } => "worktree.prune",
+        }),
+        _ => None,
     }
 }
 
@@ -165,6 +242,7 @@ fn run_worktree(
                     "branch": wt.branch,
                     "repo_root": wt.repo_root,
                     "start_commit": wt.start_commit,
+                    "head_commit": wt.head_commit,
                 }),
                 error: None,
             }
@@ -521,7 +599,7 @@ mod tests {
     use std::process::ExitCode;
     use std::str;
 
-    use clap::{CommandFactory, Parser};
+    use clap::{CommandFactory, Parser, error::ErrorKind};
     use wh_core::status::{CiClass, JobStatus, ProcessState};
 
     use super::{Cli, run, run_status, run_with_jobs, supervised_exit_code};
@@ -551,7 +629,10 @@ mod tests {
         let missing = Cli::try_parse_from([
             "wh", "worktree", "create", "--repo", ".", "acme", "repo", "job", "branch",
         ]);
-        assert!(missing.is_err());
+        assert_eq!(
+            missing.unwrap_err().kind(),
+            ErrorKind::MissingRequiredArgument
+        );
 
         let parsed = Cli::try_parse_from([
             "wh",

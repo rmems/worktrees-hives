@@ -28,15 +28,24 @@ if TYPE_CHECKING:
 
 TEST_OWNER = "acme"
 TEST_REPO = "example-repo"
+TEST_COMMIT = "a" * 40
 
 
 def _ok_create(
     path: str = "/tmp/wt/acme/example-repo/lab-H1",
     branch: str = "lab/H-001",
+    start_commit: object = TEST_COMMIT,
+    head_commit: object = TEST_COMMIT,
 ) -> SuccessResponse:
     return SuccessResponse(
         command="worktree.create",
-        data={"path": path, "branch": branch, "repo_root": "/tmp/repo"},
+        data={
+            "path": path,
+            "branch": branch,
+            "repo_root": "/tmp/repo",
+            "start_commit": start_commit,
+            "head_commit": head_commit,
+        },
         schema_version=1,
     )
 
@@ -96,6 +105,25 @@ class TestLabJobStore:
         assert loaded.hypothesis_id == "H-001"
         assert loaded.role is AgentRole.AGENT
         assert loaded.status is LabJobStatus.ALLOCATED
+        assert loaded.start_commit is None
+
+    def test_legacy_record_without_start_commit_remains_readable(self) -> None:
+        now = "2026-08-12T00:00:00Z"
+        raw = LabJob(
+            job_id="legacy",
+            hypothesis_id="H-old",
+            agent_id="agent",
+            role=AgentRole.AGENT,
+            owner=TEST_OWNER,
+            repo=TEST_REPO,
+            branch="lab/H-old",
+            worktree_path="/tmp/legacy",
+            status=LabJobStatus.ALLOCATED,
+            created_at=now,
+            updated_at=now,
+        ).to_dict()
+        raw.pop("start_commit")
+        assert LabJob.from_dict(raw).start_commit is None
 
     def test_default_path_uses_user_data(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("WH_LAB_JOBS_PATH", raising=False)
@@ -128,11 +156,79 @@ class TestAllocate:
         assert job.job_id == "lab-H-001"
         assert job.worktree_path == path
         assert job.agent_id == "grok-lab"
+        assert job.start_commit == TEST_COMMIT
         assert store.get(job.job_id) is not None
         args = wh.run.call_args[0]
         assert args[0:3] == ("worktree", "create", "--repo")
         assert args[4:6] == ("--start-point", "origin/main")
         assert args[6:10] == (TEST_OWNER, TEST_REPO, "lab-H-001", "lab/H-001")
+
+    @pytest.mark.parametrize(
+        ("start_commit", "head_commit", "message"),
+        [
+            (None, TEST_COMMIT, "start_commit"),
+            ("malformed", TEST_COMMIT, "start_commit"),
+            (TEST_COMMIT, "b" * 40, "does not equal"),
+        ],
+    )
+    def test_rejects_invalid_commit_identity_response(
+        self,
+        tmp_path: Path,
+        start_commit: object,
+        head_commit: object,
+        message: str,
+    ) -> None:
+        mgr, wh, store = _manager(tmp_path)
+        wh.run.return_value = _ok_create(start_commit=start_commit, head_commit=head_commit)
+        with pytest.raises(LabJobError, match=message):
+            mgr.allocate(
+                owner=TEST_OWNER,
+                repo=TEST_REPO,
+                start_point="origin/main",
+                hypothesis_id="H-bad",
+                agent_id="agent",
+                role=AgentRole.AGENT,
+            )
+        assert store.list_jobs() == []
+
+    def test_full_sha_response_must_match_request(self, tmp_path: Path) -> None:
+        mgr, wh, _ = _manager(tmp_path)
+        wh.run.return_value = _ok_create(start_commit="b" * 40, head_commit="b" * 40)
+        with pytest.raises(LabJobError, match="requested full object id"):
+            mgr.allocate(
+                owner=TEST_OWNER,
+                repo=TEST_REPO,
+                start_point=TEST_COMMIT,
+                hypothesis_id="H-sha",
+                agent_id="agent",
+                role=AgentRole.AGENT,
+            )
+
+    def test_full_sha_response_exact_match_is_accepted(self, tmp_path: Path) -> None:
+        mgr, wh, _ = _manager(tmp_path)
+        wh.run.return_value = _ok_create(branch="lab/H-exact")
+        job = mgr.allocate(
+            owner=TEST_OWNER,
+            repo=TEST_REPO,
+            start_point=TEST_COMMIT,
+            hypothesis_id="H-exact",
+            agent_id="agent",
+            role=AgentRole.AGENT,
+        )
+        assert job.start_commit == TEST_COMMIT
+
+    def test_rejects_abbreviated_sha_request(self, tmp_path: Path) -> None:
+        mgr, wh, _ = _manager(tmp_path)
+        with pytest.raises(LabJobError, match="full lowercase"):
+            mgr.allocate(
+                owner=TEST_OWNER,
+                repo=TEST_REPO,
+                start_point="abc1234",
+                hypothesis_id="H-short",
+                agent_id="agent",
+                role=AgentRole.AGENT,
+            )
+        wh.run.assert_not_called()
 
     def test_duplicate_job_id(self, tmp_path: Path) -> None:
         mgr, wh, _ = _manager(tmp_path)

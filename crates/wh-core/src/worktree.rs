@@ -2,7 +2,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use crate::error::{Error, PolicyCode, Result};
+use crate::error::{
+    Error, PolicyCode, Result, WorktreeCreationFailure, WorktreePostconditionFailure,
+};
 use crate::paths::{canonicalize_for_tools, derive_worktree_path, worktree_base_path};
 
 /// Result of a worktree creation operation.
@@ -16,6 +18,8 @@ pub struct Worktree {
     pub repo_root: PathBuf,
     /// Fully resolved start commit for a creation result; absent from discovery-only listings.
     pub start_commit: Option<String>,
+    /// Independently verified worker HEAD for a creation result; absent from listings.
+    pub head_commit: Option<String>,
 }
 
 /// Manages isolated git worktrees for hive jobs.
@@ -121,17 +125,19 @@ impl WorktreeManager {
                 ),
             });
         }
-        create_branch(repo_root, branch, &start_commit)?;
-
-        // Run `git worktree add` (path and branch after `--`).
+        // Ask Git to create the branch and linked worktree in one operation.
+        // If a concurrent actor creates the ref first, Git fails rather than
+        // attaching the worktree to an identity we did not create.
         let output = Command::new("git")
             .arg("-C")
             .arg(repo_root)
             .arg("worktree")
             .arg("add")
+            .arg("-b")
+            .arg(branch)
             .arg("--")
             .arg(&worktree_path)
-            .arg(branch)
+            .arg(&start_commit)
             .output()
             .map_err(|e| Error::Io {
                 context: "spawn git worktree add",
@@ -139,24 +145,29 @@ impl WorktreeManager {
             })?;
 
         if !output.status.success() {
-            rollback_created_branch(repo_root, branch, &start_commit);
-            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-            return Err(Error::GitCommand {
-                args: vec![
-                    "worktree".into(),
-                    "add".into(),
-                    worktree_path.to_string_lossy().to_string(),
-                    branch.into(),
-                ],
-                stderr,
-            });
+            let residual = inspect_residual_state(repo_root, &worktree_path, branch);
+            return Err(Error::WorktreeCreationFailed(Box::new(
+                WorktreeCreationFailure {
+                    path: worktree_path,
+                    branch: branch.to_owned(),
+                    path_exists: residual.path_exists,
+                    branch_commit: residual.branch_commit,
+                    head_commit: residual.head_commit,
+                    worktree_registered: residual.worktree_registered,
+                    stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+                },
+            )));
         }
+
+        let head_commit =
+            verify_creation_postconditions(repo_root, &worktree_path, branch, &start_commit)?;
 
         Ok(Worktree {
             path: worktree_path,
             branch: branch.to_string(),
             repo_root: repo_root.to_path_buf(),
             start_commit: Some(start_commit),
+            head_commit: Some(head_commit),
         })
     }
 
@@ -215,6 +226,7 @@ impl WorktreeManager {
                         branch,
                         repo_root: PathBuf::new(), // Not tracked in list
                         start_commit: None,        // Not tracked in list
+                        head_commit: None,         // Not tracked in list
                     });
                 }
             }
@@ -328,7 +340,19 @@ fn branch_exists_in_repo(repo_root: &Path, branch: &str) -> Result<bool> {
             source: e,
         })?;
 
-    Ok(output.status.success())
+    match output.status.code() {
+        Some(0) => Ok(true),
+        Some(1) => Ok(false),
+        _ => Err(Error::GitCommand {
+            args: vec![
+                "show-ref".into(),
+                "--verify".into(),
+                "--quiet".into(),
+                format!("refs/heads/{branch}"),
+            ],
+            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+        }),
+    }
 }
 
 /// Resolve a caller-supplied commit-ish to one exact commit object.
@@ -376,43 +400,162 @@ fn resolve_start_commit(repo_root: &Path, start_point: &str) -> Result<String> {
     Ok(commit)
 }
 
-/// Create a new branch from an already resolved commit in the repository.
-fn create_branch(repo_root: &Path, branch: &str, start_commit: &str) -> Result<()> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(repo_root)
-        .arg("branch")
-        .arg("--")
-        .arg(branch)
-        .arg(start_commit)
-        .output()
-        .map_err(|e| Error::Io {
-            context: "create branch",
-            source: e,
-        })?;
+fn verify_creation_postconditions(
+    repo_root: &Path,
+    worktree_path: &Path,
+    expected_branch: &str,
+    expected_commit: &str,
+) -> Result<String> {
+    let actual_branch = git_stdout(
+        worktree_path,
+        &["symbolic-ref", "--quiet", "--short", "HEAD"],
+        "verify created worktree branch",
+    )
+    .map_err(|error| {
+        postcondition_failure(
+            repo_root,
+            worktree_path,
+            expected_branch,
+            expected_commit,
+            None,
+            &error.to_string(),
+        )
+    })?;
+    let branch_commit = git_stdout(
+        repo_root,
+        &[
+            "rev-parse",
+            "--verify",
+            "--end-of-options",
+            &format!("refs/heads/{expected_branch}^{{commit}}"),
+        ],
+        "verify created branch commit",
+    )
+    .map_err(|error| {
+        postcondition_failure(
+            repo_root,
+            worktree_path,
+            expected_branch,
+            expected_commit,
+            Some(actual_branch.clone()),
+            &error.to_string(),
+        )
+    })?;
+    let head_commit = git_stdout(
+        worktree_path,
+        &["rev-parse", "--verify", "HEAD^{commit}"],
+        "verify created worktree HEAD",
+    )
+    .map_err(|error| {
+        postcondition_failure(
+            repo_root,
+            worktree_path,
+            expected_branch,
+            expected_commit,
+            Some(actual_branch.clone()),
+            &error.to_string(),
+        )
+    })?;
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-        return Err(Error::GitCommand {
-            args: vec!["branch".into(), branch.into(), start_commit.into()],
-            stderr,
-        });
+    if actual_branch != expected_branch
+        || branch_commit != expected_commit
+        || head_commit != expected_commit
+    {
+        return Err(postcondition_failure(
+            repo_root,
+            worktree_path,
+            expected_branch,
+            expected_commit,
+            Some(actual_branch.clone()),
+            &format!(
+                "identity mismatch: actual branch={actual_branch:?} \
+                 branch_commit={branch_commit}, head_commit={head_commit}"
+            ),
+        ));
     }
-
-    Ok(())
+    Ok(head_commit)
 }
 
-/// Atomically delete only the exact branch value created by this operation.
-/// If another actor moved the ref, the expected-old-value guard preserves it.
-fn rollback_created_branch(repo_root: &Path, branch: &str, start_commit: &str) {
-    let _ = Command::new("git")
+fn postcondition_failure(
+    repo_root: &Path,
+    worktree_path: &Path,
+    expected_branch: &str,
+    expected_commit: &str,
+    actual_branch: Option<String>,
+    cause: &str,
+) -> Error {
+    let residual = inspect_residual_state(repo_root, worktree_path, expected_branch);
+    Error::WorktreePostconditionFailed(Box::new(WorktreePostconditionFailure {
+        path: worktree_path.to_path_buf(),
+        branch: expected_branch.to_owned(),
+        expected_commit: expected_commit.to_owned(),
+        actual_branch,
+        path_exists: residual.path_exists,
+        branch_commit: residual.branch_commit,
+        head_commit: residual.head_commit,
+        worktree_registered: residual.worktree_registered,
+        reason: cause.to_owned(),
+    }))
+}
+
+fn git_stdout(repo: &Path, args: &[&str], context: &'static str) -> Result<String> {
+    let output = Command::new("git")
         .arg("-C")
-        .arg(repo_root)
-        .arg("update-ref")
-        .arg("-d")
-        .arg(format!("refs/heads/{branch}"))
-        .arg(start_commit)
-        .output();
+        .arg(repo)
+        .args(args)
+        .output()
+        .map_err(|e| Error::Io { context, source: e })?;
+    if !output.status.success() {
+        return Err(Error::GitCommand {
+            args: args.iter().map(|arg| (*arg).to_owned()).collect(),
+            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+        });
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
+}
+
+fn optional_git_stdout(repo: &Path, args: &[&str]) -> Option<String> {
+    Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(args)
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned())
+}
+
+struct ResidualState {
+    path_exists: bool,
+    branch_commit: Option<String>,
+    head_commit: Option<String>,
+    worktree_registered: bool,
+}
+
+fn inspect_residual_state(repo_root: &Path, worktree_path: &Path, branch: &str) -> ResidualState {
+    let branch_commit = optional_git_stdout(
+        repo_root,
+        &[
+            "rev-parse",
+            "--verify",
+            &format!("refs/heads/{branch}^{{commit}}"),
+        ],
+    );
+    let head_commit =
+        optional_git_stdout(worktree_path, &["rev-parse", "--verify", "HEAD^{commit}"]);
+    let worktree_registered = optional_git_stdout(repo_root, &["worktree", "list", "--porcelain"])
+        .is_some_and(|listing| {
+            listing.lines().any(|line| {
+                line.strip_prefix("worktree ")
+                    .is_some_and(|path| Path::new(path) == worktree_path)
+            })
+        });
+    ResidualState {
+        path_exists: worktree_path.exists(),
+        branch_commit,
+        head_commit,
+        worktree_registered,
+    }
 }
 
 /// Get the branch name associated with a worktree.
@@ -717,6 +860,51 @@ mod tests {
     }
 
     #[test]
+    fn create_rejects_branch_checked_out_in_another_worktree() {
+        let temp = tempdir().unwrap();
+        let repo = temp.path().join("repo");
+        fs::create_dir(&repo).unwrap();
+        let repo_root = init_test_repo(&repo).unwrap();
+        let start_commit = git_output(&repo_root, &["rev-parse", "HEAD"]);
+        let other = temp.path().join("other-worktree");
+        git_output(
+            &repo_root,
+            &[
+                "worktree",
+                "add",
+                "-b",
+                "feature/elsewhere",
+                "--",
+                other.to_str().unwrap(),
+                &start_commit,
+            ],
+        );
+        let manager = WorktreeManager::with_base(temp.path().join("worktrees")).unwrap();
+
+        let result = manager.create(
+            &repo_root,
+            "acme",
+            "test-repo",
+            "job-elsewhere",
+            "feature/elsewhere",
+            &start_commit,
+        );
+
+        assert!(matches!(
+            result,
+            Err(Error::PolicyViolation {
+                code: PolicyCode::WorktreeResumeUnproven,
+                ..
+            })
+        ));
+        assert_eq!(
+            git_output(&other, &["rev-parse", "HEAD"]),
+            start_commit,
+            "the unrelated checked-out branch must remain untouched"
+        );
+    }
+
+    #[test]
     fn create_uses_resolved_start_commit_not_ambient_head() {
         let temp = tempdir().unwrap();
         let repo = temp.path().join("repo");
@@ -743,11 +931,61 @@ mod tests {
             .unwrap();
 
         assert_eq!(wt.start_commit.as_deref(), Some(requested_commit.as_str()));
+        assert_eq!(wt.head_commit.as_deref(), Some(requested_commit.as_str()));
         assert_eq!(
             git_output(&wt.path, &["rev-parse", "HEAD"]),
             requested_commit
         );
         assert!(!wt.path.join("later.txt").exists());
+    }
+
+    #[test]
+    fn postconditions_reject_moved_branch_and_preserve_residual_state() {
+        let temp = tempdir().unwrap();
+        let repo = temp.path().join("repo");
+        fs::create_dir(&repo).unwrap();
+        let repo_root = init_test_repo(&repo).unwrap();
+        let requested_commit = git_output(&repo_root, &["rev-parse", "HEAD"]);
+        let manager = WorktreeManager::with_base(temp.path().join("worktrees")).unwrap();
+        let wt = manager
+            .create(
+                &repo_root,
+                "acme",
+                "test-repo",
+                "job-postcondition",
+                "feature/postcondition",
+                &requested_commit,
+            )
+            .unwrap();
+
+        fs::write(repo_root.join("moved.txt"), "moved\n").unwrap();
+        git_output(&repo_root, &["add", "moved.txt"]);
+        git_output(&repo_root, &["commit", "-m", "moved branch target"]);
+        let moved_commit = git_output(&repo_root, &["rev-parse", "HEAD"]);
+        git_output(
+            &repo_root,
+            &[
+                "update-ref",
+                "refs/heads/feature/postcondition",
+                &moved_commit,
+            ],
+        );
+
+        let result = verify_creation_postconditions(
+            &repo_root,
+            &wt.path,
+            "feature/postcondition",
+            &requested_commit,
+        );
+        assert!(matches!(result, Err(Error::WorktreePostconditionFailed(_))));
+        assert_eq!(
+            git_output(
+                &repo_root,
+                &["rev-parse", "refs/heads/feature/postcondition"]
+            ),
+            moved_commit
+        );
+        assert!(wt.path.exists());
     }
 
     #[test]
@@ -783,7 +1021,7 @@ mod tests {
     }
 
     #[test]
-    fn create_rolls_back_new_branch_when_worktree_add_fails() {
+    fn create_failure_reports_and_preserves_residual_branch() {
         let temp = tempdir().unwrap();
         let repo = temp.path().join("repo");
         fs::create_dir(&repo).unwrap();
@@ -806,19 +1044,32 @@ mod tests {
             &start_commit,
         );
 
-        assert!(matches!(result, Err(Error::GitCommand { .. })));
-        let branch_check = Command::new("git")
-            .arg("-C")
-            .arg(&repo_root)
-            .args([
-                "show-ref",
-                "--verify",
-                "--quiet",
-                "refs/heads/feature/rollback",
-            ])
-            .status()
-            .unwrap();
-        assert!(!branch_check.success());
+        assert!(
+            matches!(
+                result,
+                Err(Error::WorktreeCreationFailed(ref failure))
+                    if failure.branch_commit.as_ref() == Some(&start_commit)
+                        && !failure.worktree_registered
+            ),
+            "unexpected result: {result:?}"
+        );
+        assert_eq!(
+            git_output(&repo_root, &["rev-parse", "refs/heads/feature/rollback"]),
+            start_commit
+        );
+        fs::write(repo_root.join("adopted.txt"), "adopted after failure\n").unwrap();
+        git_output(&repo_root, &["add", "adopted.txt"]);
+        git_output(&repo_root, &["commit", "-m", "adopt residual branch"]);
+        let adopted_commit = git_output(&repo_root, &["rev-parse", "HEAD"]);
+        git_output(
+            &repo_root,
+            &["update-ref", "refs/heads/feature/rollback", &adopted_commit],
+        );
+        assert_eq!(
+            git_output(&repo_root, &["rev-parse", "refs/heads/feature/rollback"]),
+            adopted_commit,
+            "no delayed cleanup may delete a residual branch adopted after failure"
+        );
         assert_eq!(
             fs::read_to_string(target.join("occupied")).unwrap(),
             "force worktree add failure\n"

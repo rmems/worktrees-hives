@@ -41,7 +41,13 @@ from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from worktrees_hives.contract import ErrorResponse, SuccessResponse
+from worktrees_hives.contract import (
+    ErrorResponse,
+    SuccessResponse,
+    require_verified_worktree_commits,
+    validate_canonical_commit,
+    validate_start_point_request,
+)
 from worktrees_hives.errors import (
     PolicyError,
     WhBinaryNotFoundError,
@@ -120,6 +126,8 @@ class LabJob:
     status: LabJobStatus
     created_at: str
     updated_at: str
+    # Exact commit resolved and verified by wh; absent in legacy v1 records.
+    start_commit: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize for JSON persistence."""
@@ -149,6 +157,14 @@ class LabJob:
         wt = raw["worktree_path"]
         if wt is not None and not isinstance(wt, str):
             raise LabJobError("worktree_path must be a string or null")
+        start_commit = raw.get("start_commit")
+        if start_commit is not None:
+            try:
+                start_commit = validate_canonical_commit(
+                    start_commit, field_name="job record start_commit"
+                )
+            except WhError as exc:
+                raise LabJobError(str(exc)) from exc
         return cls(
             job_id=str(raw["job_id"]),
             hypothesis_id=str(raw["hypothesis_id"]),
@@ -161,6 +177,7 @@ class LabJob:
             status=status,
             created_at=str(raw["created_at"]),
             updated_at=str(raw["updated_at"]),
+            start_commit=start_commit,
         )
 
 
@@ -471,6 +488,10 @@ class LabJobManager:
         _validate_segment("owner", owner)
         _validate_segment("repo", repo)
         _validate_ref("start_point", start_point)
+        try:
+            validate_start_point_request(start_point)
+        except WhError as exc:
+            raise LabJobError(f"invalid start_point: {exc}") from exc
         _validate_hypothesis_id(hypothesis_id)
         if not agent_id or not str(agent_id).strip():
             raise LabJobError("agent_id is required")
@@ -510,7 +531,7 @@ class LabJobManager:
         try:
             if Path(worktree_path).exists():
                 raise LabJobExistsError(f"worktree already exists for this job: {worktree_path}")
-            path, ret_branch = self._wh_create(owner, repo, jid, br, start_point)
+            path, ret_branch, start_commit = self._wh_create(owner, repo, jid, br, start_point)
             if ret_branch != br:
                 raise LabJobError(f"wh returned branch {ret_branch!r}, expected {br!r}")
             done = replace(
@@ -519,6 +540,7 @@ class LabJobManager:
                 branch=ret_branch,
                 status=LabJobStatus.ALLOCATED,
                 updated_at=_now_iso(),
+                start_commit=start_commit,
             )
             # Only promote if still PENDING — concurrent teardown must win.
             return self.store.commit_allocated(done)
@@ -577,7 +599,7 @@ class LabJobManager:
         job_id: str,
         branch: str,
         start_point: str,
-    ) -> tuple[str, str]:
+    ) -> tuple[str, str, str]:
         resp = self._wh_run(
             "worktree",
             "create",
@@ -592,13 +614,19 @@ class LabJobManager:
         )
         if not isinstance(resp, SuccessResponse):
             raise LabJobError(f"wh worktree create failed: {resp.error.code}: {resp.error.message}")
+        try:
+            start_commit = require_verified_worktree_commits(
+                resp.data, requested_start_point=start_point
+            )
+        except WhError as exc:
+            raise LabJobError(f"invalid wh worktree.create response: {exc}") from exc
         path = resp.data.get("path")
         ret_branch = resp.data.get("branch")
         if not isinstance(path, str) or not path:
             path = self.derive_path(owner, repo, job_id)
         if not isinstance(ret_branch, str) or not ret_branch:
             ret_branch = branch
-        return path, ret_branch
+        return path, ret_branch, start_commit
 
     def _wh_remove(self, path: str, *, force: bool) -> None:
         """Remove worktree; treat already-missing path as success for tombstones."""

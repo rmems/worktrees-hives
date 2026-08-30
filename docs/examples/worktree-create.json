@@ -6,7 +6,8 @@
     "path": "/home/user/.local/share/worktrees-hives/worktrees/acme/example-repo/wh-123",
     "branch": "feature/fix",
     "repo_root": "/path/to/repo",
-    "start_commit": "0123456789abcdef0123456789abcdef01234567"
+    "start_commit": "0123456789abcdef0123456789abcdef01234567",
+    "head_commit": "0123456789abcdef0123456789abcdef01234567"
   },
   "error": null
 }
