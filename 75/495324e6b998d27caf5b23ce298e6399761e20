@@ -1,0 +1,53 @@
+python/src/worktrees_hives/cli.py
+  s_e0ddcae50d1b47::t_cbc5a7873fe45f 613,826-830
+python/src/worktrees_hives/issue_to_pr.py
+  s_e0ddcae50d1b47::t_912a2d94b7eef5 57-59,78-79,213,256-257,259-260,270-271
+docs/json-contract.md
+  s_e0ddcae50d1b47::t_0ae6adefa44168 77,80-83,94-95
+python/tests/test_issue_to_pr.py
+  s_e0ddcae50d1b47::t_66c0815ff932e5 82,106,121-130,603-607,613-618,630-632
+crates/wh-core/src/worktree.rs
+  s_e0ddcae50d1b47::t_ea625df74cbb72 5,116-120,703-716,746-749,774-779,813-818,822-825
+  s_e0ddcae50d1b47::t_a6ad4c25f1b615 17-18,159,217,665,745
+  s_e0ddcae50d1b47::t_e44586e834a80c 786-812,819-821
+  s_e0ddcae50d1b47::t_e932863fbaff38 65-67,75,108-113,115,121-124,334-380,385,387,397
+  s_e0ddcae50d1b47::t_0ae6adefa44168 142,405-415
+  s_e0ddcae50d1b47::t_8599db24957cb4 624-638,649-650,653-660,674,692-702,717-733,735-742,750-773,780-782,838-839,841-848,869-876,890-891,893-900,933-940
+python/tests/test_lab_jobs.py
+  s_e0ddcae50d1b47::t_e1cd268cca3e4c 122,134-135,144,155,168-169,177,185,200,213,226,234,244,285,311,340
+python/tests/test_lab_run.py
+  s_e0ddcae50d1b47::t_e1cd268cca3e4c 159,178,198,217,241,258,281,315,370-371,400-401,447-448
+python/src/worktrees_hives/lab_jobs.py
+  s_e0ddcae50d1b47::t_cbc5a7873fe45f 463,473,513,573-580,586-587
+python/tests/test_claim.py
+  s_e0ddcae50d1b47::t_7d383ffcc6ed8f 117,126,141,150-151,156,165,172,192,213,219,225,235
+docs/examples/worktree-create.json
+  s_e0ddcae50d1b47::t_0ae6adefa44168 8-9,12
+docs/workflows/safe-issue-verified-commit.md
+  s_e0ddcae50d1b47::t_0ae6adefa44168 46
+python/src/worktrees_hives/claim.py
+  s_e0ddcae50d1b47::t_5d5727b7403e12 46,128,133,144,164,174,188,242-249,256-257
+python/src/worktrees_hives/lab_run.py
+  s_e0ddcae50d1b47::t_cbc5a7873fe45f 293,313-314,349
+crates/wh-core/src/error.rs
+  s_e0ddcae50d1b47::t_ea625df74cbb72 56-57,73
+crates/wh/src/main.rs
+  s_e0ddcae50d1b47::t_e44586e834a80c 76-78,155,167
+  s_e0ddcae50d1b47::t_0ae6adefa44168 524,549-576
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "75495324e6b998d27caf5b23ce298e6399761e20",
+  "prompts": {},
+  "sessions": {
+    "s_e0ddcae50d1b47": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a053e6-8b19-72e1-8ba0-3db3010382a7",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Raul Montoya Cardenas <montoyaraul34@gmail.com>"
+    }
+  }
+}
