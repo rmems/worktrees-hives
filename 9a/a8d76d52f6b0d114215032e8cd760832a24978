@@ -1,0 +1,19 @@
+python/src/worktrees_hives/findings.py
+  s_3090519602b094::t_5c2c1cd81fcce0 388
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "9aa8d76d52f6b0d114215032e8cd760832a24978",
+  "prompts": {},
+  "sessions": {
+    "s_3090519602b094": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0526d-c697-7513-9053-4e7cd0af8231",
+        "model": "gpt-5.3-codex-spark"
+      },
+      "human_author": "Raul Montoya Cardenas <montoyaraul34@gmail.com>"
+    }
+  }
+}
