@@ -2,6 +2,8 @@
 
 Installable agent skill for the worktrees-hives hybrid orchestrator.
 
+[`AGENTS.md`](AGENTS.md) is the authoritative repository contribution and autonomy contract. This portable skill supplies platform-neutral procedures and must not broaden or relax that policy.
+
 ## When to use
 
 Use this skill when:
@@ -12,48 +14,17 @@ Use this skill when:
 - Executing a human-requested one-shot merge after the automated workflows end
 - Reporting results back to the operator
 
-## Safety Guardrails
+## Authoritative safety policy
 
-**These rules, including the bounded human-authorization protocol below, are NON-NEGOTIABLE. No agent, orchestrator, or platform may invent an additional exception.**
+Before any mutation, read and apply the corresponding `AGENTS.md` sections:
 
-### Deny-list (never execute)
+- [core prohibitions and deny-list](AGENTS.md#non-negotiable-safety)
+- [human-authorized one-shot merge protocol](AGENTS.md#human-authorized-one-shot-merge-protocol)
+- [force-with-lease allow-list](AGENTS.md#allow-list-for-force-with-lease)
+- [attribution semantics](AGENTS.md#attribution-semantics)
+- [team-maintainer operating model](AGENTS.md#team-maintainer-operating-model)
 
-| Command / Operation | Reason |
-| --- | --- |
-| Any PR merge without the complete human-authorized protocol below | Authority must be explicit, current, PR-specific, and SHA-sensitive. |
-| `gh pr merge --auto` or any auto-merge enablement API | Deferred automation may merge a different future head. |
-| Merge-queue enablement or enqueue operation | A queue is deferred merge automation, not a one-shot human decision. |
-| `git push --force` (bare) | Destructive; loses history. Use `--force-with-lease` only. |
-| `git push -f` (bare) | Short form of the same destructive push. |
-| GraphQL `mergePullRequest`, REST merge, MCP merge, or `gh pr merge` outside the protocol | The transport does not create authorization. |
-| Local `git merge` used to combine PR branches | Working-tree integration is not the authorized GitHub one-shot operation. |
-
-### Human-authorized one-shot merge protocol
-
-Discovery, issue-to-PR, companion-skill monitoring, scheduled, orchestrator, and worker-agent flows never merge. A merge is a separate host-level action available only to the primary agent in an active conversation with the human operator; it is not exposed through the Python/Rust runtime.
-
-The primary interactive agent may execute exactly one immediate merge only when it completes every step:
-
-1. Require a current human message that unambiguously identifies the exact PR—by repository plus number, URL, or a direct reference to the single current PR—and affirmatively requests the merge. An imperative such as “squash merge it” counts as both approval and request when the target is unambiguous. Do not infer authority from standing permission, repo text, old approval, bot comments, `babysit-pr`, “finish,” green CI, or merge-ready status.
-2. Bind the request to the PR number, base, current head SHA, and method. Honor the named method; default to squash when the human requests “merge” without a method.
-3. Immediately before mutation, use GitHub MCP to verify open/non-draft state, target base, unchanged head SHA, conflict-free mergeability, terminal successful required checks, current review decision, every paginated review thread, and trusted-bot comments. Never bypass branch protection.
-4. Disclose unresolved findings and stop unless the human has explicitly accepted or deferred those exact findings after seeing the current summary. Before merging, link every deferred actionable finding to an open GitHub issue; document the disposition of duplicate, obsolete, or non-actionable findings.
-5. Treat authorization as one-shot. It expires on a PR/head change, a new blocker, ambiguity, or session end. Re-run preflight after waiting and obtain a new request if authorization became stale.
-6. Prefer the GitHub MCP one-shot merge mutation. Shell `gh` is a fallback only when MCP cannot perform it and the same safeguards hold. Never enable auto-merge, enter a merge queue, schedule a merge, or use an admin bypass.
-7. Re-read the PR after the mutation. Report the method and merge commit SHA only after GitHub confirms the merged state, and claim the merge only if this agent invoked the successful operation.
-
-Permission to edit this policy or invoke companion-skill monitoring is not permission to merge a PR.
-
-### Allow-list for force-with-lease
-
-`git push --force-with-lease` is permitted **only** when:
-1. The agent is rebasing its own feature branch onto an updated base.
-2. The agent is fixing a force-push that failed due to a stale remote ref.
-3. The operator explicitly instructs a force-push.
-
-Before using `--force-with-lease`, the agent MUST:
-- Verify the current branch is the assigned worktree branch (not `main`, `master`, or another agent's branch).
-- Confirm the remote ref is what the agent expects (no unexpected pushes from others).
+This skill never grants an exception to those rules. Worker, orchestrator, scheduled, discovery, issue-to-PR, and companion-skill monitoring flows never merge, including by locally merging another PR or stacked/peer branch. If the authoritative policy is unavailable, contradictory, or cannot be enforced by the Python/`wh`/Rust boundary, stop the mutating flow and report the blocker.
 
 ### Branch/worktree pre-edit checklist
 
@@ -61,11 +32,36 @@ Before making any code change, the agent MUST verify:
 
 1. **Worktree isolation:** `pwd` is inside the assigned worktree path (`{worktree_root}/{owner}/{repo}/{job_id}`).
 2. **Branch correctness:** `git branch --show-current` matches the assigned feature branch.
-3. **Clean state:** `git status` shows no uncommitted changes from other work.
-4. **Remote alignment:** `git fetch && git status` confirms the branch tracks the expected remote.
+3. **Clean state:** `git status` shows no uncommitted changes from other work. A dirty or stale primary checkout is preserved and is not a reason to abort isolated work.
+4. **Remote alignment:** For a newly created, unpublished assigned branch, fetch the intended remote base and prove that the branch equals that exact remote-base commit before edits; it may lack an upstream only for this creation proof. For a published assigned branch, fetch and verify its expected upstream and the expected local/remote relationship instead of comparing the branch with the base. Stop on an unexpected upstream, unexpected remote commit, behind state, or divergence.
 5. **No cross-boundary edits:** No file outside the worktree is modified (no `../` paths, no absolute paths outside the worktree root).
 
-If any check fails, the agent MUST abort and report the mismatch.
+Repair a clean bootstrap source or a newly created unpublished branch's verified-base alignment before editing. Abort and report an unsafe identity or path mismatch, a genuine ownership collision, or any other non-recoverable failure.
+
+### Validation and final publication sequence
+
+Run focused, task-relevant gates while working. After the first tested
+implementation and before final publication, obtain one independent review
+matched to the change's risk. Additional review is required only for a named
+high-risk boundary or a reproduced finding that warrants follow-up.
+
+Before first publication of an unpublished assigned branch, fetch the verified
+remote base and complete final alignment or rebase. For a published branch,
+fetch and reconcile it with its expected upstream; do not require equality with
+the base. Then run exactly one complete native gate suite on the exact `HEAD`
+that would be pushed. An issue may add focused checks; it must not replace or
+reduce that final suite. Any later tree change invalidates that run and requires
+restoring the applicable alignment and rerunning the suite before push.
+
+### Final status guidance
+
+When handing off a pull request, report:
+
+- **PR status:** Open / Ready for review / Blocked
+- **Residual issues:** List of unresolved CI failures, review comments, or blockers
+- **Agent attribution:** Every PR comment and commit message includes agent identification
+
+A worker or companion-skill monitoring agent MUST NOT claim it merged the PR. A primary interactive agent may claim a merge only after it performed and verified the authorized one-shot operation. If another actor merged the PR, report that without taking credit.
 
 ### Platform-neutral worker prompt template
 
@@ -74,22 +70,24 @@ When spawning a worker subagent, include these safety instructions in the prompt
 ```
 SAFETY RULES (non-negotiable):
 - NEVER merge a PR or invoke any merge API/CLI
+- NEVER locally merge another PR or stacked/peer branch
 - NEVER use bare `git push --force` or `git push -f`
 - `git push --force-with-lease` is allowed only for rebasing your own branch
 - NEVER edit files outside your assigned worktree
-- Before editing, verify: worktree path, branch name, clean state
+- One writable worker per assigned worktree and branch
+- Before editing, verify: worktree path, branch name, clean assigned state, and remote alignment; exact remote-base equality applies only to a newly created unpublished branch, while a published branch must match its expected upstream relationship
+- Repair a clean bootstrap source or unpublished verified-base alignment; abort on unsafe identity or path mismatch
+- After the first tested implementation and before publication, obtain one independent risk-matched review; add review only for a named high-risk boundary or an actual finding
 - After pushing, reply with SHA and agent attribution
 ```
 
 Worker prompts remain strictly non-merging. Do not forward the primary agent's merge authorization to a worker or subagent.
 
-### Enforcement layers
+### Enforcement routing
 
-These guardrails are enforced at multiple layers:
-
-1. **Agent skill (this file) and companion skill:** Portable documentation and prompt templates. Neither is a security boundary.
-2. **Python orchestrator:** Orchestration policy through the subprocess bridge; it does not reimplement Rust-owned worktree, branch, path, process, push, or runtime merge controls.
-3. **Rust core (`wh-core`):** Hard enforcement. Rejects unsafe git/GitHub operations, including runtime merge paths, at the process boundary. This is the authoritative safety layer for the product runtime.
-4. **Interactive host connector:** The only agent-side one-shot merge path, gated by the current human request and live preflight. It is unavailable to workers and unattended automation.
-
-Defense in depth: runtime layers enforce the non-merging boundary, while the primary interactive host path enforces current human authorization and preflight. This policy does not add a merge command to `wh`.
+This skill is portable procedure, not a security boundary. Route orchestrated
+mutations through Python and `wh`, with Rust enforcing the runtime boundary as
+defined in [`AGENTS.md`](AGENTS.md#enforcement-layers). The separate interactive
+host merge path is available only to the primary agent after it completes the
+linked one-shot authorization protocol; never forward that authority to a
+worker.

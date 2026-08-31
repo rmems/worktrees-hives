@@ -22,7 +22,9 @@ For stacked pull requests, review and fix the bottom PR before its children. Re-
 - [ ] Changes satisfy the linked acceptance criteria without unrelated refactors.
 - [ ] Session work is reflected accurately in Beads.
 - [ ] Generated replies identify the agent and, after a fix, include the pushed commit SHA.
-- [ ] Codex-authored commits contain exact `Agent: Codex` and `Co-authored-by: Codex <noreply@openai.com>` trailers without rewriting Cursor-attributed history.
+- [ ] Attribution is audited only on commits reachable from the submitted PR head and not its base, excluding synthetic review-merge/checkout and test-fixture commits. The Git author is the primary author, `Co-authored-by` credits an additional contributor, and `Agent` identifies the coding agent; the presence of one does not prove another.
+- [ ] Every Codex-authored commit in that submitted range contains exact `Agent: Codex` and `Co-authored-by: Codex <noreply@openai.com>` trailers without rewriting Cursor-attributed history.
+- [ ] After the first tested implementation and before final publication, one independent review matched to the change's risk was completed. Extra review was requested only for a named high-risk boundary or a reproduced finding that warranted follow-up.
 
 ### Safety
 
