@@ -22,6 +22,17 @@ pub struct Worktree {
     pub head_commit: Option<String>,
 }
 
+/// Inputs required to create one isolated worktree at an explicit start point.
+#[derive(Debug, Clone, Copy)]
+pub struct WorktreeCreateRequest<'a> {
+    pub repo_root: &'a Path,
+    pub owner: &'a str,
+    pub repo: &'a str,
+    pub job_id: &'a str,
+    pub branch: &'a str,
+    pub start_point: &'a str,
+}
+
 /// Manages isolated git worktrees for hive jobs.
 #[derive(Debug, Default)]
 pub struct WorktreeManager {
@@ -67,8 +78,8 @@ impl WorktreeManager {
     ///
     /// The worktree path will be: `{base}/{owner}/{repo}/{job_id}`.
     /// `start_point` is required and is resolved to a commit before any branch
-    /// mutation. Existing branches are rejected because v1 has no durable
-    /// resume identity that can prove ownership of an existing ref.
+    /// mutation. Existing branches are rejected because the exact-base contract
+    /// does not define a durable resume identity for an existing ref.
     pub fn create(
         &self,
         repo_root: &Path,
@@ -78,94 +89,40 @@ impl WorktreeManager {
         branch: &str,
         start_point: &str,
     ) -> Result<Worktree> {
-        // Reject option-looking branch names (would be parsed as git flags).
-        if branch.is_empty() || branch.starts_with('-') {
-            return Err(Error::GitCommand {
-                args: vec!["worktree".into(), "add".into()],
-                stderr: format!("invalid branch name (empty or option-looking): {branch:?}"),
-            });
-        }
+        self.create_with_request(WorktreeCreateRequest {
+            repo_root,
+            owner,
+            repo,
+            job_id,
+            branch,
+            start_point,
+        })
+    }
 
+    /// Create a worktree from a typed request used by CLI and orchestration adapters.
+    pub fn create_with_request(&self, request: WorktreeCreateRequest<'_>) -> Result<Worktree> {
+        validate_worktree_branch(request.branch)?;
         let base = self.base_path()?;
-        let worktree_path = derive_worktree_path(base, owner, repo, job_id)?;
-
-        // Reject symlink *segments under the base* (not OS aliases above the base
-        // such as macOS /var → /private/var). Pre-check existing segments, mkdir,
-        // then re-check so we never follow a planted escape link.
-        reject_symlink_components_under(base, &worktree_path)?;
-        if let Some(parent) = worktree_path.parent() {
-            fs::create_dir_all(parent).map_err(|e| Error::Io {
-                context: "create worktree parent directories",
-                source: e,
-            })?;
-            reject_symlink_components_under(base, parent)?;
-        }
-
-        // Verify the repo_root is a valid git repository
-        if !repo_root.join(".git").exists() && !is_bare_repo(repo_root)? {
-            return Err(Error::GitCommand {
-                args: vec!["worktree".into(), "add".into()],
-                stderr: format!("not a git repository: {}", repo_root.display()),
-            });
-        }
+        validate_repo_root(request.repo_root)?;
 
         // Resolve the caller-selected start point before any mutation. Appending
         // ^{commit} rejects trees/blobs and peels annotated tags to commits.
-        let start_commit = resolve_start_commit(repo_root, start_point)?;
+        let start_commit = resolve_start_commit(request.repo_root, request.start_point)?;
+        let worktree_path = prepare_worktree_path(base, &request)?;
+        reject_unproven_resume(&request, &start_commit)?;
+        add_worktree(&request, &worktree_path, &start_commit)?;
 
-        // Existing refs cannot be resumed safely without a durable identity
-        // binding the job, branch, repository, and expected commit.
-        let branch_exists = branch_exists_in_repo(repo_root, branch)?;
-        if branch_exists {
-            return Err(Error::PolicyViolation {
-                code: PolicyCode::WorktreeResumeUnproven,
-                message: format!(
-                    "refusing to reuse existing branch {branch:?} at requested commit \
-                     {start_commit}: safe resume identity is not proven"
-                ),
-            });
-        }
-        // Ask Git to create the branch and linked worktree in one operation.
-        // If a concurrent actor creates the ref first, Git fails rather than
-        // attaching the worktree to an identity we did not create.
-        let output = Command::new("git")
-            .arg("-C")
-            .arg(repo_root)
-            .arg("worktree")
-            .arg("add")
-            .arg("-b")
-            .arg(branch)
-            .arg("--")
-            .arg(&worktree_path)
-            .arg(&start_commit)
-            .output()
-            .map_err(|e| Error::Io {
-                context: "spawn git worktree add",
-                source: e,
-            })?;
-
-        if !output.status.success() {
-            let residual = inspect_residual_state(repo_root, &worktree_path, branch);
-            return Err(Error::WorktreeCreationFailed(Box::new(
-                WorktreeCreationFailure {
-                    path: worktree_path,
-                    branch: branch.to_owned(),
-                    path_exists: residual.path_exists,
-                    branch_commit: residual.branch_commit,
-                    head_commit: residual.head_commit,
-                    worktree_registered: residual.worktree_registered,
-                    stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-                },
-            )));
-        }
-
-        let head_commit =
-            verify_creation_postconditions(repo_root, &worktree_path, branch, &start_commit)?;
+        let head_commit = verify_creation_postconditions(
+            request.repo_root,
+            &worktree_path,
+            request.branch,
+            &start_commit,
+        )?;
 
         Ok(Worktree {
             path: worktree_path,
-            branch: branch.to_string(),
-            repo_root: repo_root.to_path_buf(),
+            branch: request.branch.to_owned(),
+            repo_root: request.repo_root.to_path_buf(),
             start_commit: Some(start_commit),
             head_commit: Some(head_commit),
         })
@@ -309,6 +266,99 @@ impl WorktreeManager {
     }
 }
 
+fn validate_worktree_branch(branch: &str) -> Result<()> {
+    match branch.chars().next() {
+        None | Some('-') => Err(Error::GitCommand {
+            args: vec!["worktree".into(), "add".into()],
+            stderr: format!("invalid branch name (empty or option-looking): {branch:?}"),
+        }),
+        Some(_) => Ok(()),
+    }
+}
+
+fn prepare_worktree_path(base: &Path, request: &WorktreeCreateRequest<'_>) -> Result<PathBuf> {
+    let worktree_path = derive_worktree_path(base, request.owner, request.repo, request.job_id)?;
+
+    // Reject symlink segments beneath the canonical base before and after
+    // creating parents so a planted link is never followed.
+    reject_symlink_components_under(base, &worktree_path)?;
+    if let Some(parent) = worktree_path.parent() {
+        fs::create_dir_all(parent).map_err(|e| Error::Io {
+            context: "create worktree parent directories",
+            source: e,
+        })?;
+        reject_symlink_components_under(base, parent)?;
+    }
+    Ok(worktree_path)
+}
+
+fn validate_repo_root(repo_root: &Path) -> Result<()> {
+    if repo_root.join(".git").exists() {
+        return Ok(());
+    }
+    if is_bare_repo(repo_root)? {
+        return Ok(());
+    }
+    Err(Error::GitCommand {
+        args: vec!["worktree".into(), "add".into()],
+        stderr: format!("not a git repository: {}", repo_root.display()),
+    })
+}
+
+fn reject_unproven_resume(request: &WorktreeCreateRequest<'_>, start_commit: &str) -> Result<()> {
+    if branch_exists_in_repo(request.repo_root, request.branch)? {
+        return Err(Error::PolicyViolation {
+            code: PolicyCode::WorktreeResumeUnproven,
+            message: format!(
+                "refusing to reuse existing branch {:?} at requested commit \
+                 {start_commit}: safe resume identity is not proven",
+                request.branch
+            ),
+        });
+    }
+    Ok(())
+}
+
+fn add_worktree(
+    request: &WorktreeCreateRequest<'_>,
+    worktree_path: &Path,
+    start_commit: &str,
+) -> Result<()> {
+    // Create the branch and linked worktree in one operation. If a concurrent
+    // actor creates the ref first, Git fails rather than attaching to it.
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(request.repo_root)
+        .arg("worktree")
+        .arg("add")
+        .arg("-b")
+        .arg(request.branch)
+        .arg("--")
+        .arg(worktree_path)
+        .arg(start_commit)
+        .output()
+        .map_err(|e| Error::Io {
+            context: "spawn git worktree add",
+            source: e,
+        })?;
+
+    if output.status.success() {
+        return Ok(());
+    }
+    let residual = inspect_residual_state(request.repo_root, worktree_path, request.branch);
+    Err(Error::WorktreeCreationFailed(Box::new(
+        WorktreeCreationFailure {
+            path: worktree_path.to_path_buf(),
+            branch: request.branch.to_owned(),
+            path_exists: residual.path_exists,
+            branch_commit: residual.branch_commit,
+            head_commit: residual.head_commit,
+            worktree_registered: residual.worktree_registered,
+            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+        },
+    )))
+}
+
 /// Check if a path is a bare git repository.
 fn is_bare_repo(path: &Path) -> Result<bool> {
     let output = Command::new("git")
@@ -363,6 +413,15 @@ fn resolve_start_commit(repo_root: &Path, start_point: &str) -> Result<String> {
             stderr: "start point must not be empty".into(),
         });
     }
+    let is_all_hex = start_point
+        .chars()
+        .all(|character| character.is_ascii_hexdigit());
+    if is_all_hex && !matches!(start_point.len(), 40 | 64) {
+        return Err(Error::GitCommand {
+            args: vec!["rev-parse".into(), "--verify".into()],
+            stderr: "all-hex start point must be a full 40- or 64-character object id".into(),
+        });
+    }
 
     let commitish = format!("{start_point}^{{commit}}");
     let output = Command::new("git")
@@ -397,7 +456,124 @@ fn resolve_start_commit(repo_root: &Path, start_point: &str) -> Result<String> {
             stderr: format!("start point {start_point:?} resolved to an empty commit id"),
         });
     }
+    if is_all_hex && !commit.eq_ignore_ascii_case(start_point) {
+        return Err(Error::GitCommand {
+            args: vec![
+                "rev-parse".into(),
+                "--verify".into(),
+                "--end-of-options".into(),
+                commitish,
+            ],
+            stderr: format!(
+                "all-hex start point must equal the full canonical object id; requested \
+                 {start_point:?}, resolved {commit:?}"
+            ),
+        });
+    }
     Ok(commit)
+}
+
+struct CreationPostconditions<'a> {
+    repo_root: &'a Path,
+    worktree_path: &'a Path,
+    expected_branch: &'a str,
+    expected_commit: &'a str,
+}
+
+impl CreationPostconditions<'_> {
+    fn actual_branch_ref(&self) -> Result<String> {
+        git_stdout(
+            self.worktree_path,
+            &["symbolic-ref", "--quiet", "HEAD"],
+            "verify created worktree branch",
+        )
+        .map_err(|error| self.failure(None, &error.to_string()))
+    }
+
+    fn branch_commit(&self, actual_branch: &str) -> Result<String> {
+        git_stdout(
+            self.repo_root,
+            &[
+                "rev-parse",
+                "--verify",
+                "--end-of-options",
+                &format!("refs/heads/{}^{{commit}}", self.expected_branch),
+            ],
+            "verify created branch commit",
+        )
+        .map_err(|error| self.failure(Some(actual_branch.to_owned()), &error.to_string()))
+    }
+
+    fn head_commit(&self, actual_branch: &str) -> Result<String> {
+        git_stdout(
+            self.worktree_path,
+            &["rev-parse", "--verify", "HEAD^{commit}"],
+            "verify created worktree HEAD",
+        )
+        .map_err(|error| self.failure(Some(actual_branch.to_owned()), &error.to_string()))
+    }
+
+    fn verify_identity(
+        &self,
+        actual_branch_ref: &str,
+        branch_commit: &str,
+        head_commit: &str,
+    ) -> Result<()> {
+        let expected_branch_ref = format!("refs/heads/{}", self.expected_branch);
+        let actual = [actual_branch_ref, branch_commit, head_commit];
+        let expected = [
+            expected_branch_ref.as_str(),
+            self.expected_commit,
+            self.expected_commit,
+        ];
+        if actual != expected {
+            return Err(self.failure(
+                Some(actual_branch_ref.to_owned()),
+                &format!(
+                    "identity mismatch: actual branch ref={actual_branch_ref:?} \
+                     branch_commit={branch_commit}, head_commit={head_commit}"
+                ),
+            ));
+        }
+        Ok(())
+    }
+
+    fn verify_registration(&self, actual_branch_ref: &str, head_commit: &str) -> Result<()> {
+        let listing = git_stdout(
+            self.repo_root,
+            &["worktree", "list", "--porcelain"],
+            "verify created worktree registration",
+        )
+        .map_err(|error| self.failure(Some(actual_branch_ref.to_owned()), &error.to_string()))?;
+        if !worktree_registration_matches(
+            &listing,
+            self.worktree_path,
+            actual_branch_ref,
+            head_commit,
+        ) {
+            return Err(self.failure(
+                Some(actual_branch_ref.to_owned()),
+                "worktree registration does not match the expected path, branch, and HEAD",
+            ));
+        }
+        Ok(())
+    }
+
+    fn failure(&self, actual_branch: Option<String>, cause: &str) -> Error {
+        let residual =
+            inspect_residual_state(self.repo_root, self.worktree_path, self.expected_branch);
+        Error::WorktreePostconditionFailed(Box::new(WorktreePostconditionFailure {
+            path: self.worktree_path.to_path_buf(),
+            branch: self.expected_branch.to_owned(),
+            expected_commit: self.expected_commit.to_owned(),
+            actual_branch,
+            path_exists: residual.path_exists,
+            branch_commit: residual.branch_commit,
+            head_commit: residual.head_commit,
+            worktree_registered: residual.worktree_registered,
+            reason: cause.to_owned(),
+        }))
+    }
 }
 
 fn verify_creation_postconditions(
@@ -406,96 +582,43 @@ fn verify_creation_postconditions(
     expected_branch: &str,
     expected_commit: &str,
 ) -> Result<String> {
-    let actual_branch = git_stdout(
-        worktree_path,
-        &["symbolic-ref", "--quiet", "--short", "HEAD"],
-        "verify created worktree branch",
-    )
-    .map_err(|error| {
-        postcondition_failure(
-            repo_root,
-            worktree_path,
-            expected_branch,
-            expected_commit,
-            None,
-            &error.to_string(),
-        )
-    })?;
-    let branch_commit = git_stdout(
+    let postconditions = CreationPostconditions {
         repo_root,
-        &[
-            "rev-parse",
-            "--verify",
-            "--end-of-options",
-            &format!("refs/heads/{expected_branch}^{{commit}}"),
-        ],
-        "verify created branch commit",
-    )
-    .map_err(|error| {
-        postcondition_failure(
-            repo_root,
-            worktree_path,
-            expected_branch,
-            expected_commit,
-            Some(actual_branch.clone()),
-            &error.to_string(),
-        )
-    })?;
-    let head_commit = git_stdout(
         worktree_path,
-        &["rev-parse", "--verify", "HEAD^{commit}"],
-        "verify created worktree HEAD",
-    )
-    .map_err(|error| {
-        postcondition_failure(
-            repo_root,
-            worktree_path,
-            expected_branch,
-            expected_commit,
-            Some(actual_branch.clone()),
-            &error.to_string(),
-        )
-    })?;
-
-    if actual_branch != expected_branch
-        || branch_commit != expected_commit
-        || head_commit != expected_commit
-    {
-        return Err(postcondition_failure(
-            repo_root,
-            worktree_path,
-            expected_branch,
-            expected_commit,
-            Some(actual_branch.clone()),
-            &format!(
-                "identity mismatch: actual branch={actual_branch:?} \
-                 branch_commit={branch_commit}, head_commit={head_commit}"
-            ),
-        ));
-    }
+        expected_branch,
+        expected_commit,
+    };
+    let actual_branch_ref = postconditions.actual_branch_ref()?;
+    let branch_commit = postconditions.branch_commit(&actual_branch_ref)?;
+    let head_commit = postconditions.head_commit(&actual_branch_ref)?;
+    postconditions.verify_identity(&actual_branch_ref, &branch_commit, &head_commit)?;
+    postconditions.verify_registration(&actual_branch_ref, &head_commit)?;
     Ok(head_commit)
 }
 
-fn postcondition_failure(
-    repo_root: &Path,
-    worktree_path: &Path,
-    expected_branch: &str,
-    expected_commit: &str,
-    actual_branch: Option<String>,
-    cause: &str,
-) -> Error {
-    let residual = inspect_residual_state(repo_root, worktree_path, expected_branch);
-    Error::WorktreePostconditionFailed(Box::new(WorktreePostconditionFailure {
-        path: worktree_path.to_path_buf(),
-        branch: expected_branch.to_owned(),
-        expected_commit: expected_commit.to_owned(),
-        actual_branch,
-        path_exists: residual.path_exists,
-        branch_commit: residual.branch_commit,
-        head_commit: residual.head_commit,
-        worktree_registered: residual.worktree_registered,
-        reason: cause.to_owned(),
-    }))
+fn worktree_registration_matches(
+    listing: &str,
+    expected_path: &Path,
+    expected_branch_ref: &str,
+    expected_head: &str,
+) -> bool {
+    listing.split("\n\n").any(|entry| {
+        let mut path = None;
+        let mut branch = None;
+        let mut head = None;
+        for line in entry.lines() {
+            if let Some(value) = line.strip_prefix("worktree ") {
+                path = Some(Path::new(value));
+            } else if let Some(value) = line.strip_prefix("branch ") {
+                branch = Some(value);
+            } else if let Some(value) = line.strip_prefix("HEAD ") {
+                head = Some(value);
+            }
+        }
+        path == Some(expected_path)
+            && branch == Some(expected_branch_ref)
+            && head == Some(expected_head)
+    })
 }
 
 fn git_stdout(repo: &Path, args: &[&str], context: &'static str) -> Result<String> {
@@ -698,18 +821,23 @@ mod tests {
     use tempfile::tempdir;
 
     fn init_test_repo(dir: &Path) -> Result<PathBuf> {
+        init_test_repo_with_object_format(dir, None)
+    }
+
+    fn init_test_repo_with_object_format(
+        dir: &Path,
+        object_format: Option<&str>,
+    ) -> Result<PathBuf> {
         // Initialize a git repo
-        Command::new("git")
-            .arg("-C")
-            .arg(dir)
-            .arg("init")
-            .arg("-b")
-            .arg("main")
-            .output()
-            .map_err(|e| Error::Io {
-                context: "git init",
-                source: e,
-            })?;
+        let mut init = Command::new("git");
+        init.arg("-C").arg(dir).arg("init");
+        if let Some(format) = object_format {
+            init.arg(format!("--object-format={format}"));
+        }
+        init.arg("-b").arg("main").output().map_err(|e| Error::Io {
+            context: "git init",
+            source: e,
+        })?;
 
         // Configure git for testing
         Command::new("git")
@@ -793,14 +921,14 @@ mod tests {
 
         // Create a worktree for a new branch
         let wt = manager
-            .create(
-                &repo_root,
-                "acme",
-                "test-repo",
-                "job-1",
-                "feature/test",
-                &start_commit,
-            )
+            .create_with_request(WorktreeCreateRequest {
+                repo_root: &repo_root,
+                owner: "acme",
+                repo: "test-repo",
+                job_id: "job-1",
+                branch: "feature/test",
+                start_point: &start_commit,
+            })
             .unwrap();
 
         assert!(wt.path.exists());
@@ -811,6 +939,29 @@ mod tests {
         let listed = manager.list().unwrap();
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].path, wt.path);
+    }
+
+    #[test]
+    fn positional_create_api_remains_compatible() {
+        let temp = tempdir().unwrap();
+        let repo = temp.path().join("repo");
+        fs::create_dir(&repo).unwrap();
+        let repo_root = init_test_repo(&repo).unwrap();
+        let start_commit = git_output(&repo_root, &["rev-parse", "HEAD"]);
+        let manager = WorktreeManager::with_base(temp.path().join("worktrees")).unwrap();
+
+        let wt = manager
+            .create(
+                &repo_root,
+                "acme",
+                "test-repo",
+                "job-positional",
+                "feature/positional",
+                &start_commit,
+            )
+            .unwrap();
+
+        assert_eq!(wt.head_commit.as_deref(), Some(start_commit.as_str()));
     }
 
     #[test]
@@ -834,14 +985,14 @@ mod tests {
 
         let start_commit = git_output(&repo_root, &["rev-parse", "HEAD"]);
 
-        let result = manager.create(
-            &repo_root,
-            "acme",
-            "test-repo",
-            "job-2",
-            "existing-branch",
-            &start_commit,
-        );
+        let result = manager.create_with_request(WorktreeCreateRequest {
+            repo_root: &repo_root,
+            owner: "acme",
+            repo: "test-repo",
+            job_id: "job-2",
+            branch: "existing-branch",
+            start_point: &start_commit,
+        });
 
         assert!(matches!(
             result,
@@ -881,14 +1032,14 @@ mod tests {
         );
         let manager = WorktreeManager::with_base(temp.path().join("worktrees")).unwrap();
 
-        let result = manager.create(
-            &repo_root,
-            "acme",
-            "test-repo",
-            "job-elsewhere",
-            "feature/elsewhere",
-            &start_commit,
-        );
+        let result = manager.create_with_request(WorktreeCreateRequest {
+            repo_root: &repo_root,
+            owner: "acme",
+            repo: "test-repo",
+            job_id: "job-elsewhere",
+            branch: "feature/elsewhere",
+            start_point: &start_commit,
+        });
 
         assert!(matches!(
             result,
@@ -920,14 +1071,14 @@ mod tests {
 
         let manager = WorktreeManager::with_base(temp.path().join("worktrees")).unwrap();
         let wt = manager
-            .create(
-                &repo_root,
-                "acme",
-                "test-repo",
-                "job-exact",
-                "feature/exact",
-                &requested_commit,
-            )
+            .create_with_request(WorktreeCreateRequest {
+                repo_root: &repo_root,
+                owner: "acme",
+                repo: "test-repo",
+                job_id: "job-exact",
+                branch: "feature/exact",
+                start_point: &requested_commit,
+            })
             .unwrap();
 
         assert_eq!(wt.start_commit.as_deref(), Some(requested_commit.as_str()));
@@ -940,6 +1091,34 @@ mod tests {
     }
 
     #[test]
+    fn create_verifies_full_branch_ref_when_same_named_tag_exists() {
+        let temp = tempdir().unwrap();
+        let repo = temp.path().join("repo");
+        fs::create_dir(&repo).unwrap();
+        let repo_root = init_test_repo(&repo).unwrap();
+        let requested_commit = git_output(&repo_root, &["rev-parse", "HEAD"]);
+        git_output(&repo_root, &["tag", "feature/collision", &requested_commit]);
+
+        let manager = WorktreeManager::with_base(temp.path().join("worktrees")).unwrap();
+        let wt = manager
+            .create_with_request(WorktreeCreateRequest {
+                repo_root: &repo_root,
+                owner: "acme",
+                repo: "test-repo",
+                job_id: "job-collision",
+                branch: "feature/collision",
+                start_point: &requested_commit,
+            })
+            .unwrap();
+
+        assert_eq!(
+            git_output(&wt.path, &["symbolic-ref", "--quiet", "HEAD"]),
+            "refs/heads/feature/collision"
+        );
+        assert_eq!(wt.head_commit.as_deref(), Some(requested_commit.as_str()));
+    }
+
+    #[test]
     fn postconditions_reject_moved_branch_and_preserve_residual_state() {
         let temp = tempdir().unwrap();
         let repo = temp.path().join("repo");
@@ -948,14 +1127,14 @@ mod tests {
         let requested_commit = git_output(&repo_root, &["rev-parse", "HEAD"]);
         let manager = WorktreeManager::with_base(temp.path().join("worktrees")).unwrap();
         let wt = manager
-            .create(
-                &repo_root,
-                "acme",
-                "test-repo",
-                "job-postcondition",
-                "feature/postcondition",
-                &requested_commit,
-            )
+            .create_with_request(WorktreeCreateRequest {
+                repo_root: &repo_root,
+                owner: "acme",
+                repo: "test-repo",
+                job_id: "job-postcondition",
+                branch: "feature/postcondition",
+                start_point: &requested_commit,
+            })
             .unwrap();
 
         fs::write(repo_root.join("moved.txt"), "moved\n").unwrap();
@@ -989,6 +1168,31 @@ mod tests {
     }
 
     #[test]
+    fn registration_identity_requires_matching_path_branch_and_head() {
+        let path = Path::new("/tmp/hive/job");
+        let expected_head = "a".repeat(40);
+        let correct = format!(
+            "worktree /tmp/hive/job\nHEAD {expected_head}\nbranch refs/heads/feature/job\n\n"
+        );
+        let wrong_branch = format!(
+            "worktree /tmp/hive/job\nHEAD {expected_head}\nbranch refs/heads/feature/other\n\n"
+        );
+
+        assert!(worktree_registration_matches(
+            &correct,
+            path,
+            "refs/heads/feature/job",
+            &expected_head,
+        ));
+        assert!(!worktree_registration_matches(
+            &wrong_branch,
+            path,
+            "refs/heads/feature/job",
+            &expected_head,
+        ));
+    }
+
+    #[test]
     fn create_rejects_invalid_start_point_without_creating_branch() {
         let temp = tempdir().unwrap();
         let repo = temp.path().join("repo");
@@ -996,14 +1200,14 @@ mod tests {
         let repo_root = init_test_repo(&repo).unwrap();
         let manager = WorktreeManager::with_base(temp.path().join("worktrees")).unwrap();
 
-        let result = manager.create(
-            &repo_root,
-            "acme",
-            "test-repo",
-            "job-invalid",
-            "feature/invalid",
-            "refs/heads/does-not-exist",
-        );
+        let result = manager.create_with_request(WorktreeCreateRequest {
+            repo_root: &repo_root,
+            owner: "acme",
+            repo: "test-repo",
+            job_id: "job-invalid",
+            branch: "feature/invalid",
+            start_point: "refs/heads/does-not-exist",
+        });
 
         assert!(matches!(result, Err(Error::GitCommand { .. })));
         let branch_check = Command::new("git")
@@ -1021,6 +1225,128 @@ mod tests {
     }
 
     #[test]
+    fn create_rejects_abbreviated_all_hex_start_point_without_mutation() {
+        let temp = tempdir().unwrap();
+        let repo = temp.path().join("repo");
+        fs::create_dir(&repo).unwrap();
+        let repo_root = init_test_repo(&repo).unwrap();
+        let full_commit = git_output(&repo_root, &["rev-parse", "HEAD"]);
+        let abbreviated = &full_commit[..12];
+        let manager = WorktreeManager::with_base(temp.path().join("worktrees")).unwrap();
+
+        let result = manager.create_with_request(WorktreeCreateRequest {
+            repo_root: &repo_root,
+            owner: "acme",
+            repo: "test-repo",
+            job_id: "job-abbreviated",
+            branch: "feature/abbreviated",
+            start_point: abbreviated,
+        });
+
+        assert!(matches!(result, Err(Error::GitCommand { .. })));
+        assert!(
+            git_output(&repo_root, &["branch", "--list", "feature/abbreviated"])
+                .trim()
+                .is_empty()
+        );
+        assert!(
+            !manager
+                .base_path()
+                .unwrap()
+                .join("acme/test-repo/job-abbreviated")
+                .exists()
+        );
+    }
+
+    #[test]
+    fn create_accepts_uppercase_full_object_id_and_returns_canonical_lowercase() {
+        let temp = tempdir().unwrap();
+        let repo = temp.path().join("repo");
+        fs::create_dir(&repo).unwrap();
+        let repo_root = init_test_repo(&repo).unwrap();
+        let full_commit = git_output(&repo_root, &["rev-parse", "HEAD"]);
+        let uppercase_commit = full_commit.to_ascii_uppercase();
+        let manager = WorktreeManager::with_base(temp.path().join("worktrees")).unwrap();
+
+        let wt = manager
+            .create_with_request(WorktreeCreateRequest {
+                repo_root: &repo_root,
+                owner: "acme",
+                repo: "test-repo",
+                job_id: "job-uppercase",
+                branch: "feature/uppercase",
+                start_point: &uppercase_commit,
+            })
+            .unwrap();
+
+        assert_eq!(wt.start_commit.as_deref(), Some(full_commit.as_str()));
+        assert_eq!(wt.head_commit.as_deref(), Some(full_commit.as_str()));
+    }
+
+    #[test]
+    fn create_accepts_uppercase_full_sha256_and_returns_canonical_lowercase() {
+        let temp = tempdir().unwrap();
+        let repo = temp.path().join("repo");
+        fs::create_dir(&repo).unwrap();
+        let repo_root = init_test_repo_with_object_format(&repo, Some("sha256")).unwrap();
+        let full_commit = git_output(&repo_root, &["rev-parse", "HEAD"]);
+        assert_eq!(full_commit.len(), 64);
+        let uppercase_commit = full_commit.to_ascii_uppercase();
+        let manager = WorktreeManager::with_base(temp.path().join("worktrees")).unwrap();
+
+        let wt = manager
+            .create_with_request(WorktreeCreateRequest {
+                repo_root: &repo_root,
+                owner: "acme",
+                repo: "test-repo",
+                job_id: "job-uppercase-sha256",
+                branch: "feature/uppercase-sha256",
+                start_point: &uppercase_commit,
+            })
+            .unwrap();
+
+        assert_eq!(wt.start_commit.as_deref(), Some(full_commit.as_str()));
+        assert_eq!(wt.head_commit.as_deref(), Some(full_commit.as_str()));
+    }
+
+    #[test]
+    fn create_rejects_sha256_prefix_with_sha1_width_without_mutation() {
+        let temp = tempdir().unwrap();
+        let repo = temp.path().join("repo");
+        fs::create_dir(&repo).unwrap();
+        let repo_root = init_test_repo_with_object_format(&repo, Some("sha256")).unwrap();
+        let full_commit = git_output(&repo_root, &["rev-parse", "HEAD"]);
+        assert_eq!(full_commit.len(), 64);
+        let abbreviated = &full_commit[..40];
+        let manager = WorktreeManager::with_base(temp.path().join("worktrees")).unwrap();
+        let expected_path = manager
+            .base_path()
+            .unwrap()
+            .join("acme/test-repo/job-sha256-prefix");
+
+        let result = manager.create_with_request(WorktreeCreateRequest {
+            repo_root: &repo_root,
+            owner: "acme",
+            repo: "test-repo",
+            job_id: "job-sha256-prefix",
+            branch: "feature/sha256-prefix",
+            start_point: abbreviated,
+        });
+
+        assert!(matches!(result, Err(Error::GitCommand { .. })));
+        assert!(
+            git_output(&repo_root, &["branch", "--list", "feature/sha256-prefix"])
+                .trim()
+                .is_empty()
+        );
+        assert!(!expected_path.exists());
+        assert!(
+            !git_output(&repo_root, &["worktree", "list", "--porcelain"])
+                .contains(&expected_path.to_string_lossy().to_string())
+        );
+    }
+
+    #[test]
     fn create_failure_reports_and_preserves_residual_branch() {
         let temp = tempdir().unwrap();
         let repo = temp.path().join("repo");
@@ -1035,14 +1361,14 @@ mod tests {
         fs::create_dir_all(&target).unwrap();
         fs::write(target.join("occupied"), "force worktree add failure\n").unwrap();
 
-        let result = manager.create(
-            &repo_root,
-            "acme",
-            "test-repo",
-            "job-collision",
-            "feature/rollback",
-            &start_commit,
-        );
+        let result = manager.create_with_request(WorktreeCreateRequest {
+            repo_root: &repo_root,
+            owner: "acme",
+            repo: "test-repo",
+            job_id: "job-collision",
+            branch: "feature/rollback",
+            start_point: &start_commit,
+        });
 
         assert!(
             matches!(
@@ -1089,14 +1415,14 @@ mod tests {
         let start_commit = git_output(&repo_root, &["rev-parse", "HEAD"]);
 
         let wt = manager
-            .create(
-                &repo_root,
-                "acme",
-                "test-repo",
-                "job-3",
-                "feature/remove",
-                &start_commit,
-            )
+            .create_with_request(WorktreeCreateRequest {
+                repo_root: &repo_root,
+                owner: "acme",
+                repo: "test-repo",
+                job_id: "job-3",
+                branch: "feature/remove",
+                start_point: &start_commit,
+            })
             .unwrap();
 
         assert!(wt.path.exists());
@@ -1117,14 +1443,14 @@ mod tests {
         let manager = WorktreeManager::with_base(base).unwrap();
 
         // Try to create a worktree with path traversal in job_id
-        let result = manager.create(
-            &repo_root,
-            "acme",
-            "test-repo",
-            "../escape",
-            "branch",
-            "HEAD",
-        );
+        let result = manager.create_with_request(WorktreeCreateRequest {
+            repo_root: &repo_root,
+            owner: "acme",
+            repo: "test-repo",
+            job_id: "../escape",
+            branch: "branch",
+            start_point: "HEAD",
+        });
         assert!(result.is_err());
     }
 
@@ -1141,14 +1467,14 @@ mod tests {
         let start_commit = git_output(&repo_root, &["rev-parse", "HEAD"]);
 
         let wt = manager
-            .create(
-                &repo_root,
-                "acme",
-                "test-repo",
-                "job-4",
-                "feature/prune",
-                &start_commit,
-            )
+            .create_with_request(WorktreeCreateRequest {
+                repo_root: &repo_root,
+                owner: "acme",
+                repo: "test-repo",
+                job_id: "job-4",
+                branch: "feature/prune",
+                start_point: &start_commit,
+            })
             .unwrap();
 
         // Remove the worktree directory manually (simulating stale state)
@@ -1181,14 +1507,14 @@ mod tests {
             std::os::windows::fs::symlink_dir(&outside, &owner_link).unwrap();
         }
 
-        let result = manager.create(
-            &repo_root,
-            "acme",
-            "test-repo",
-            "job-sym",
-            "branch-sym",
-            "HEAD",
-        );
+        let result = manager.create_with_request(WorktreeCreateRequest {
+            repo_root: &repo_root,
+            owner: "acme",
+            repo: "test-repo",
+            job_id: "job-sym",
+            branch: "branch-sym",
+            start_point: "HEAD",
+        });
         assert!(
             matches!(result, Err(Error::SandboxViolation { .. })),
             "expected SandboxViolation, got {result:?}"

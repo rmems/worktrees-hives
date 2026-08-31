@@ -9,7 +9,7 @@ use clap::{Parser, Subcommand};
 #[derive(Debug, Parser)]
 #[command(name = "wh", version, about, long_about = None)]
 struct Cli {
-    /// Emit responses as v1 JSON envelopes.
+    /// Emit responses as versioned JSON envelopes.
     #[arg(long, global = true)]
     json: bool,
 
@@ -73,9 +73,16 @@ enum WorktreeAction {
         job_id: String,
         /// Branch name for the worktree.
         branch: String,
-        /// Commit or ref at which the new branch must be created.
+        /// Commit or ref required by v2 for exact-base branch creation.
         #[arg(long)]
-        start_point: String,
+        start_point: Option<String>,
+        /// Boundary schema: v1 returns an upgrade error; select v2 to create.
+        #[arg(
+            long,
+            default_value_t = wh_core::contract::SCHEMA_VERSION,
+            value_parser = clap::value_parser!(u8).range(1..=2)
+        )]
+        schema_version: u8,
     },
     /// List hive worktrees under the configured base.
     List,
@@ -126,6 +133,7 @@ async fn main() -> ExitCode {
     let cli = Cli::parse();
     let json = cli.json;
     let worktree_command = worktree_command_name(&cli);
+    let worktree_schema_version = worktree_schema_version(&cli);
 
     match run(cli, &mut io::stdout()).await {
         Ok(code) => code,
@@ -133,7 +141,7 @@ async fn main() -> ExitCode {
             if json && let Some(command) = worktree_command {
                 let response = wh_core::contract::Response {
                     ok: false,
-                    schema_version: wh_core::contract::SCHEMA_VERSION,
+                    schema_version: worktree_schema_version,
                     command,
                     data: worktree_error_data(&error),
                     error: Some(wh_core::contract::ErrorData {
@@ -154,6 +162,11 @@ async fn main() -> ExitCode {
 
 fn worktree_error_data(error: &wh_core::error::Error) -> serde_json::Value {
     match error {
+        wh_core::error::Error::ContractUpgradeRequired {
+            required_schema_version,
+        } => serde_json::json!({
+            "required_schema_version": required_schema_version,
+        }),
         wh_core::error::Error::WorktreeCreationFailed(failure) => {
             let wh_core::error::WorktreeCreationFailure {
                 path,
@@ -202,6 +215,15 @@ fn worktree_error_data(error: &wh_core::error::Error) -> serde_json::Value {
     }
 }
 
+fn worktree_schema_version(cli: &Cli) -> u8 {
+    match &cli.command {
+        Some(Command::Worktree {
+            action: WorktreeAction::Create { schema_version, .. },
+        }) => *schema_version,
+        _ => wh_core::contract::SCHEMA_VERSION,
+    }
+}
+
 fn worktree_command_name(cli: &Cli) -> Option<&'static str> {
     match &cli.command {
         Some(Command::Worktree { action }) => Some(match action {
@@ -214,15 +236,13 @@ fn worktree_command_name(cli: &Cli) -> Option<&'static str> {
     }
 }
 
-fn run_worktree(
+fn worktree_response(
     action: WorktreeAction,
-    json: bool,
-    stdout: &mut impl Write,
-) -> wh_core::error::Result<ExitCode> {
+) -> wh_core::error::Result<wh_core::contract::Response<serde_json::Value>> {
     use wh_core::contract::Response;
-    use wh_core::worktree::WorktreeManager;
+    use wh_core::worktree::{WorktreeCreateRequest, WorktreeManager};
 
-    let response = match action {
+    match action {
         WorktreeAction::Create {
             repo,
             owner,
@@ -230,62 +250,72 @@ fn run_worktree(
             job_id,
             branch,
             start_point,
+            schema_version,
         } => {
+            if schema_version == wh_core::contract::SCHEMA_VERSION {
+                return Err(wh_core::error::Error::ContractUpgradeRequired {
+                    required_schema_version: wh_core::contract::EXACT_BASE_SCHEMA_VERSION,
+                });
+            }
+            let start_point = start_point.ok_or(wh_core::error::Error::StartPointRequired)?;
             let manager = WorktreeManager::new()?;
-            let wt = manager.create(&repo, &owner, &repo_name, &job_id, &branch, &start_point)?;
-            Response {
-                ok: true,
-                schema_version: wh_core::contract::SCHEMA_VERSION,
-                command: "worktree.create",
-                data: serde_json::json!({
+            let wt = manager.create_with_request(WorktreeCreateRequest {
+                repo_root: &repo,
+                owner: &owner,
+                repo: &repo_name,
+                job_id: &job_id,
+                branch: &branch,
+                start_point: &start_point,
+            })?;
+            Ok(Response::success_with_schema(
+                "worktree.create",
+                serde_json::json!({
                     "path": wt.path,
                     "branch": wt.branch,
+                    "branch_ref": format!("refs/heads/{}", wt.branch),
                     "repo_root": wt.repo_root,
                     "start_commit": wt.start_commit,
                     "head_commit": wt.head_commit,
+                    "worktree_registered": true,
                 }),
-                error: None,
-            }
+                schema_version,
+            ))
         }
         WorktreeAction::List => {
             let manager = WorktreeManager::new()?;
             let worktrees = manager.list()?;
-            Response {
-                ok: true,
-                schema_version: wh_core::contract::SCHEMA_VERSION,
-                command: "worktree.list",
-                data: serde_json::json!({
+            Ok(Response::success(
+                "worktree.list",
+                serde_json::json!({
                     "worktrees": worktrees.iter().map(|wt| serde_json::json!({
                         "path": wt.path,
                         "branch": wt.branch,
                     })).collect::<Vec<_>>(),
                 }),
-                error: None,
-            }
+            ))
         }
         WorktreeAction::Remove { path, force } => {
             let manager = WorktreeManager::new()?;
             manager.remove(&path, force)?;
-            Response {
-                ok: true,
-                schema_version: wh_core::contract::SCHEMA_VERSION,
-                command: "worktree.remove",
-                data: serde_json::json!({ "removed": path }),
-                error: None,
-            }
+            Ok(Response::success(
+                "worktree.remove",
+                serde_json::json!({ "removed": path }),
+            ))
         }
         WorktreeAction::Prune { repo } => {
             let manager = WorktreeManager::new()?;
             manager.prune(&repo)?;
-            Response {
-                ok: true,
-                schema_version: wh_core::contract::SCHEMA_VERSION,
-                command: "worktree.prune",
-                data: serde_json::json!({}),
-                error: None,
-            }
+            Ok(Response::success("worktree.prune", serde_json::json!({})))
         }
-    };
+    }
+}
+
+fn run_worktree(
+    action: WorktreeAction,
+    json: bool,
+    stdout: &mut impl Write,
+) -> wh_core::error::Result<ExitCode> {
+    let response = worktree_response(action)?;
 
     if json {
         serde_json::to_writer(&mut *stdout, &response).map_err(io::Error::other)?;
@@ -599,7 +629,7 @@ mod tests {
     use std::process::ExitCode;
     use std::str;
 
-    use clap::{CommandFactory, Parser, error::ErrorKind};
+    use clap::{CommandFactory, Parser};
     use wh_core::status::{CiClass, JobStatus, ProcessState};
 
     use super::{Cli, run, run_status, run_with_jobs, supervised_exit_code};
@@ -625,19 +655,29 @@ mod tests {
     }
 
     #[test]
-    fn worktree_create_requires_explicit_start_point() {
+    fn worktree_create_parser_distinguishes_v1_migration_from_v2_exact_base() {
         let missing = Cli::try_parse_from([
             "wh", "worktree", "create", "--repo", ".", "acme", "repo", "job", "branch",
-        ]);
-        assert_eq!(
-            missing.unwrap_err().kind(),
-            ErrorKind::MissingRequiredArgument
-        );
+        ])
+        .unwrap();
+        let Some(super::Command::Worktree {
+            action:
+                super::WorktreeAction::Create {
+                    start_point: None,
+                    schema_version: 1,
+                    ..
+                },
+        }) = missing.command
+        else {
+            panic!("expected legacy worktree create request")
+        };
 
         let parsed = Cli::try_parse_from([
             "wh",
             "worktree",
             "create",
+            "--schema-version",
+            "2",
             "--repo",
             ".",
             "--start-point",
@@ -649,12 +689,18 @@ mod tests {
         ])
         .unwrap();
         let Some(super::Command::Worktree {
-            action: super::WorktreeAction::Create { start_point, .. },
+            action:
+                super::WorktreeAction::Create {
+                    start_point,
+                    schema_version,
+                    ..
+                },
         }) = parsed.command
         else {
             panic!("expected worktree create command")
         };
-        assert_eq!(start_point, "origin/trunk");
+        assert_eq!(start_point.as_deref(), Some("origin/trunk"));
+        assert_eq!(schema_version, 2);
     }
 
     #[tokio::test]

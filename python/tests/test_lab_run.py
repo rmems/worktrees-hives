@@ -460,3 +460,94 @@ class TestCliLabRun:
         env = json.loads(capsys.readouterr().out)
         assert env["ok"] is False
         assert env["error"]["code"] == "FINDINGS_INVALID"
+
+    def test_json_envelope_preserves_worktree_failure_code_and_residual_data(
+        self, tmp_path: Path, monkeypatch, capsys
+    ) -> None:
+        target = tmp_path / "worktrees" / OWNER / REPO / "lab-H-001"
+        residual = {
+            "path": str(target),
+            "branch": "lab/H-001",
+            "path_exists": True,
+            "branch_commit": "a" * 40,
+            "head_commit": None,
+            "worktree_registered": False,
+            "cleanup_performed": False,
+        }
+        from worktrees_hives.contract import ErrorData, ErrorResponse
+
+        fake_wh = MagicMock()
+        fake_wh.run.return_value = ErrorResponse(
+            command="worktree.create",
+            error=ErrorData(code="WORKTREE_CREATE_FAILED", message="git add failed"),
+            schema_version=2,
+            data=residual,
+        )
+        monkeypatch.setenv("WH_ALLOWED_OWNERS", OWNER)
+        monkeypatch.setattr("worktrees_hives.cli.WhClient", lambda: fake_wh)
+
+        code = main(
+            [
+                "--json",
+                "lab",
+                "run",
+                "--owner",
+                OWNER,
+                "--repo",
+                REPO,
+                "--start-point",
+                "origin/main",
+                "--hypothesis-id",
+                "H-001",
+                "--agent-id",
+                "grok",
+                "--worktree-base",
+                str(tmp_path / "worktrees"),
+                "--repo-root",
+                str(tmp_path / "repo"),
+                "--lab-jobs-path",
+                str(tmp_path / "lab-jobs.json"),
+            ]
+        )
+
+        assert code == 1
+        env = json.loads(capsys.readouterr().out)
+        assert env["error"]["code"] == "WORKTREE_CREATE_FAILED"
+        assert env["data"] == residual
+
+    def test_json_envelope_preserves_policy_error_data(self, monkeypatch, capsys) -> None:
+        residual = {"path": "/tmp/residual", "worktree_registered": True}
+
+        def fake_run(manager, **kwargs):
+            raise PolicyError(
+                "WORKTREE_RESUME_UNPROVEN",
+                "existing branch identity is unproven",
+                data=residual,
+            )
+
+        monkeypatch.setattr("worktrees_hives.cli.run_lab_unit", fake_run)
+        monkeypatch.setattr("worktrees_hives.cli.WhClient", MagicMock)
+        monkeypatch.setattr("worktrees_hives.cli.LabJobManager", lambda *a, **k: MagicMock())
+
+        code = main(
+            [
+                "--json",
+                "lab",
+                "run",
+                "--owner",
+                OWNER,
+                "--repo",
+                REPO,
+                "--start-point",
+                "origin/main",
+                "--hypothesis-id",
+                "H-001",
+                "--agent-id",
+                "grok",
+            ]
+        )
+
+        assert code == 2
+        env = json.loads(capsys.readouterr().out)
+        assert env["error"]["code"] == "WORKTREE_RESUME_UNPROVEN"
+        assert env["data"] == residual

@@ -27,7 +27,8 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 from worktrees_hives.bridge import WhClient
 from worktrees_hives.contract import (
     SuccessResponse,
-    require_verified_worktree_commits,
+    WorktreeCreateRequest,
+    parse_verified_worktree_creation,
     validate_start_point_request,
 )
 from worktrees_hives.errors import WhError
@@ -113,8 +114,15 @@ class Step(StrEnum):
 class IssueToPrError(WhError):
     """Raised when the issue-to-PR workflow encounters an unrecoverable error."""
 
-    def __init__(self, step: Step, detail: str) -> None:
+    def __init__(
+        self,
+        step: Step,
+        detail: str,
+        *,
+        data: dict[str, object] | None = None,
+    ) -> None:
         self.step = step
+        self.data = dict(data or {})
         super().__init__(f"IssueToPr failed at step '{step.value}': {detail}")
 
 
@@ -217,7 +225,7 @@ class IssueToPr:
         _validate_branch_name("base_branch", config.base_branch)
         _validate_branch_name("start_point", config.start_point)
         try:
-            validate_start_point_request(config.start_point)
+            start_point = validate_start_point_request(config.start_point)
         except WhError as exc:
             raise IssueToPrError(Step.INIT, f"invalid start_point: {exc}") from exc
         _validate_path_segment("owner", config.owner)
@@ -228,6 +236,7 @@ class IssueToPr:
                 f"issue_number must be a positive integer, got {config.issue_number}",
             )
         self._cfg = config
+        self._start_point = start_point
         self._wh = wh_client or WhClient()
         self._step = Step.INIT
 
@@ -266,32 +275,32 @@ class IssueToPr:
         The Rust boundary resolves ``start_point`` to a commit and creates the
         missing branch at exactly that commit::
 
-            wh worktree create --repo <path> --start-point <commit-or-ref> \
+            wh worktree create --schema-version 2 --repo <path> \
+                --start-point <commit-or-ref> \
                 <owner> <repo_name> <job_id> <branch>
         """
         _validate_branch_name("branch", branch_name)
         job_id = f"issue-{self._cfg.issue_number}"
+        request = WorktreeCreateRequest(
+            owner=self._cfg.owner,
+            repo=self._cfg.repo,
+            job_id=job_id,
+            branch=branch_name,
+            start_point=self._start_point,
+        )
         try:
-            resp = self._wh.run(
-                "worktree",
-                "create",
-                "--repo",
-                self._cfg.repo_path,
-                "--start-point",
-                self._cfg.start_point,
-                self._cfg.owner,
-                self._cfg.repo,
-                job_id,
-                branch_name,
-            )
+            resp = self._wh.run(*request.cli_args(self._cfg.repo_path))
         except WhError as exc:
             self._step = Step.FAILED
-            raise IssueToPrError(Step.INIT, str(exc)) from exc
+            raise IssueToPrError(Step.INIT, str(exc), data=getattr(exc, "data", None)) from exc
 
         if isinstance(resp, SuccessResponse):
             try:
-                start_commit = require_verified_worktree_commits(
-                    resp.data, requested_start_point=self._cfg.start_point
+                creation = parse_verified_worktree_creation(
+                    resp.data,
+                    requested_start_point=self._start_point,
+                    expected_path=worktree_path,
+                    expected_branch=branch_name,
                 )
             except WhError as exc:
                 self._step = Step.FAILED
@@ -299,14 +308,13 @@ class IssueToPr:
                     Step.INIT, f"invalid wh worktree.create response: {exc}"
                 ) from exc
             self._step = Step.WORKTREE_CREATED
-            # Prefer path from response when present; keep derived for callers.
-            _ = worktree_path
-            return start_commit
+            return creation.start_commit
         else:
             self._step = Step.FAILED
             raise IssueToPrError(
                 Step.INIT,
                 f"wh returned error: {resp.error.code}: {resp.error.message}",
+                data=resp.data,
             )
 
     def _push_branch(self, branch_name: str, worktree_path: str) -> None:

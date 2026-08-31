@@ -14,11 +14,14 @@ from worktrees_hives.contract import (
     ErrorResponse,
     Response,
     SuccessResponse,
+    WorktreeCreateRequest,
     classify,
+    parse_verified_worktree_creation,
 )
 from worktrees_hives.errors import (
     PolicyError,
     WhBinaryNotFoundError,
+    WhContractVersionError,
     WhJsonDecodeError,
     WhProcessError,
     WhSchemaError,
@@ -140,7 +143,7 @@ class TestResolveWhBinary:
 
 
 class TestResponseFromDict:
-    """Tests for v1 envelope schema validation."""
+    """Tests for supported boundary-envelope schema validation."""
 
     def _valid_envelope(self, **overrides):
         base = {
@@ -160,6 +163,10 @@ class TestResponseFromDict:
         assert resp.command == "cli.bootstrap"
         assert resp.data == {}
         assert resp.error is None
+
+    def test_valid_v2_success_envelope(self):
+        resp = Response.from_dict(self._valid_envelope(schema_version=2))
+        assert resp.schema_version == 2
 
     def test_valid_error_envelope(self):
         envelope = self._valid_envelope(
@@ -260,12 +267,63 @@ class TestClassify:
             ok=False,
             schema_version=1,
             command="cli.some_command",
-            data={},
+            data={"path": "/tmp/residual"},
             error=ErrorData(code="E001", message="bad"),
         )
         result = classify(resp)
         assert isinstance(result, ErrorResponse)
         assert result.error.code == "E001"
+        assert result.data == {"path": "/tmp/residual"}
+
+
+class TestVerifiedWorktreeCreation:
+    def test_requires_exact_path_branch_ref_and_registration(self):
+        creation = parse_verified_worktree_creation(
+            {
+                "path": "/tmp/worktrees/acme/repo/job",
+                "branch": "feature/job",
+                "branch_ref": "refs/heads/feature/job",
+                "start_commit": "a" * 40,
+                "head_commit": "a" * 40,
+                "worktree_registered": True,
+            },
+            requested_start_point="a" * 40,
+            expected_path="/tmp/worktrees/acme/repo/job",
+            expected_branch="feature/job",
+        )
+
+        assert creation.path == "/tmp/worktrees/acme/repo/job"
+        assert creation.branch == "feature/job"
+        assert creation.branch_ref == "refs/heads/feature/job"
+        assert creation.worktree_registered is True
+
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [
+            ("path", None),
+            ("branch", None),
+            ("branch_ref", None),
+            ("worktree_registered", False),
+        ],
+    )
+    def test_rejects_missing_or_unproven_registration_identity(self, field, value):
+        data = {
+            "path": "/tmp/worktrees/acme/repo/job",
+            "branch": "feature/job",
+            "branch_ref": "refs/heads/feature/job",
+            "start_commit": "a" * 40,
+            "head_commit": "a" * 40,
+            "worktree_registered": True,
+        }
+        data[field] = value
+
+        with pytest.raises(WhSchemaError):
+            parse_verified_worktree_creation(
+                data,
+                requested_start_point="a" * 40,
+                expected_path="/tmp/worktrees/acme/repo/job",
+                expected_branch="feature/job",
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -323,6 +381,120 @@ class TestWhClientRun:
         client = WhClient()
         with pytest.raises(WhProcessError, match="exited with code 2"):
             client.run("bad-cmd")
+
+    @patch("worktrees_hives.bridge.subprocess.run")
+    @patch("worktrees_hives.bridge._resolve_wh_binary", return_value="/usr/bin/wh")
+    def test_v2_request_to_v1_binary_raises_machine_classifiable_version_error(
+        self, mock_resolve, mock_run
+    ):
+        mock_run.return_value = MagicMock(
+            returncode=2,
+            stdout="",
+            stderr="error: unexpected argument '--schema-version' found",
+        )
+
+        with pytest.raises(WhContractVersionError) as exc_info:
+            WhClient().run(
+                "worktree",
+                "create",
+                "--schema-version",
+                "2",
+                "--start-point",
+                "origin/main",
+            )
+
+        assert exc_info.value.code == "CONTRACT_VERSION_UNSUPPORTED"
+        assert exc_info.value.requested_schema_version == 2
+
+    @patch("worktrees_hives.bridge.subprocess.run")
+    @patch("worktrees_hives.bridge._resolve_wh_binary", return_value="/usr/bin/wh")
+    def test_v2_request_rejects_v1_success_envelope(self, mock_resolve, mock_run):
+        mock_run.return_value = MagicMock(
+            returncode=0,
+            stdout=FAKE_SUCCESS_JSON,
+            stderr="",
+        )
+
+        with pytest.raises(WhContractVersionError) as exc_info:
+            WhClient().run("worktree", "create", "--schema-version", "2")
+
+        assert exc_info.value.requested_schema_version == 2
+
+    @patch("worktrees_hives.bridge.subprocess.run")
+    @patch("worktrees_hives.bridge._resolve_wh_binary", return_value="/usr/bin/wh")
+    def test_worktree_create_equals_selector_is_version_checked(self, mock_resolve, mock_run):
+        mock_run.return_value = MagicMock(
+            returncode=0,
+            stdout=FAKE_SUCCESS_JSON,
+            stderr="",
+        )
+
+        with pytest.raises(WhContractVersionError) as exc_info:
+            WhClient().run("worktree", "create", "--schema-version=2")
+
+        assert exc_info.value.requested_schema_version == 2
+
+    @pytest.mark.parametrize(
+        "args",
+        [
+            ("supervisor", "run", "tool", "--schema-version", "2"),
+            ("git-safe", "show", "--schema-version", "2"),
+            ("gh-safe", "pr", "view", "--schema-version=2"),
+        ],
+    )
+    @patch("worktrees_hives.bridge.subprocess.run")
+    @patch("worktrees_hives.bridge._resolve_wh_binary", return_value="/usr/bin/wh")
+    def test_unrelated_child_schema_selector_does_not_change_boundary_version(
+        self, mock_resolve, mock_run, args
+    ):
+        mock_run.return_value = MagicMock(
+            returncode=0,
+            stdout=FAKE_SUCCESS_JSON,
+            stderr="",
+        )
+
+        result = WhClient().run(*args)
+
+        assert isinstance(result, SuccessResponse)
+        assert result.schema_version == 1
+
+    @patch("worktrees_hives.bridge.subprocess.run")
+    @patch("worktrees_hives.bridge._resolve_wh_binary", return_value="/usr/bin/wh")
+    def test_v2_clap_error_unrelated_to_version_remains_process_error(self, mock_resolve, mock_run):
+        mock_run.return_value = MagicMock(
+            returncode=2,
+            stdout="",
+            stderr="error: the following required arguments were not provided: --repo",
+        )
+
+        with pytest.raises(WhProcessError) as exc_info:
+            WhClient().run("worktree", "create", "--schema-version", "2")
+
+        assert not isinstance(exc_info.value, WhContractVersionError)
+
+    def test_worktree_create_request_selects_v2_boundary(self):
+        request = WorktreeCreateRequest(
+            owner="acme",
+            repo="sample",
+            job_id="gh-1",
+            branch="feature/gh-1",
+            start_point="origin/main",
+        )
+
+        assert request.cli_args("/repo") == (
+            "worktree",
+            "create",
+            "--schema-version",
+            "2",
+            "--repo",
+            "/repo",
+            "--start-point",
+            "origin/main",
+            "acme",
+            "sample",
+            "gh-1",
+            "feature/gh-1",
+        )
 
     @patch("worktrees_hives.bridge.subprocess.run")
     @patch("worktrees_hives.bridge._resolve_wh_binary", return_value="/usr/bin/wh")
@@ -464,13 +636,37 @@ class TestWhClientRun:
 class TestPolicyExitCode:
     @patch("worktrees_hives.bridge.subprocess.run")
     @patch("worktrees_hives.bridge._resolve_wh_binary", return_value="/usr/bin/wh")
+    def test_exit_1_postcondition_error_preserves_residual_data(self, mock_resolve, mock_run):
+        envelope = json.dumps(
+            {
+                "ok": False,
+                "schema_version": 1,
+                "command": "worktree.create",
+                "data": {"path": "/tmp/residual", "branch": "hive/gh-1"},
+                "error": {
+                    "code": "WORKTREE_POSTCONDITION_FAILED",
+                    "message": "created worktree identity could not be verified",
+                },
+            }
+        )
+        mock_run.return_value = MagicMock(returncode=1, stdout=envelope, stderr="")
+        result = WhClient().run("worktree", "create")
+        assert isinstance(result, ErrorResponse)
+        assert result.error.code == "WORKTREE_POSTCONDITION_FAILED"
+        assert result.data == {
+            "path": "/tmp/residual",
+            "branch": "hive/gh-1",
+        }
+
+    @patch("worktrees_hives.bridge.subprocess.run")
+    @patch("worktrees_hives.bridge._resolve_wh_binary", return_value="/usr/bin/wh")
     def test_exit_2_valid_error_envelope_raises_policy_error(self, mock_resolve, mock_run):
         envelope = json.dumps(
             {
                 "ok": False,
                 "schema_version": 1,
                 "command": "worktree.create",
-                "data": {},
+                "data": {"path": "/tmp/residual", "branch": "hive/gh-1"},
                 "error": {"code": "PathEscape", "message": "path outside sandbox"},
             }
         )
@@ -478,6 +674,10 @@ class TestPolicyExitCode:
         with pytest.raises(PolicyError, match="PathEscape") as exc_info:
             WhClient().run("worktree", "create")
         assert exc_info.value.code == "PathEscape"
+        assert exc_info.value.data == {
+            "path": "/tmp/residual",
+            "branch": "hive/gh-1",
+        }
 
     @patch("worktrees_hives.bridge.subprocess.run")
     @patch("worktrees_hives.bridge._resolve_wh_binary", return_value="/usr/bin/wh")

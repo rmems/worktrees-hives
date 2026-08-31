@@ -285,6 +285,22 @@ def assert_command_allowed(command: str | Sequence[str]) -> None:
         )
 
 
+def _validate_optional_command(command: str | Sequence[str] | None) -> None:
+    if command is None:
+        return
+    if not _command_to_argv(command):
+        raise LabRunError("lab run --command is empty")
+    assert_command_allowed(command)
+
+
+def _allocated_findings_paths(job: LabJob) -> tuple[str, Path, Path]:
+    worktree_path = job.worktree_path
+    if not worktree_path:
+        raise LabRunError(f"allocated job {job.job_id!r} has no worktree_path")
+    json_path, markdown_path = findings_paths(worktree_path)
+    return worktree_path, json_path, markdown_path
+
+
 def run_lab_unit(
     manager: LabJobManager,
     *,
@@ -330,11 +346,7 @@ def run_lab_unit(
     teardown_on_error:
         Tear down the job if command or findings validation fails.
     """
-    if command is not None:
-        argv_pre = _command_to_argv(command)
-        if not argv_pre:
-            raise LabRunError("lab run --command is empty")
-        assert_command_allowed(command)
+    _validate_optional_command(command)
     if (
         not isinstance(command_timeout, (int, float))
         or isinstance(command_timeout, bool)
@@ -353,10 +365,7 @@ def run_lab_unit(
         branch=branch,
         job_id=job_id,
     )
-    wt = job.worktree_path
-    if not wt:
-        raise LabRunError(f"allocated job {job.job_id!r} has no worktree_path")
-    jpath, mpath = findings_paths(wt)
+    wt, jpath, mpath = _allocated_findings_paths(job)
     command_exit: int | None = None
     try:
         if command is not None:

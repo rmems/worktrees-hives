@@ -20,6 +20,7 @@ from worktrees_hives.issue_to_pr import (
     Step,
     _is_forbidden_merge_cmd,
 )
+from worktrees_hives.paths import default_worktree_base
 
 TEST_COMMIT = "a" * 40
 
@@ -69,18 +70,33 @@ def _success_response(
     start_commit: object = TEST_COMMIT,
     head_commit: object = TEST_COMMIT,
 ) -> SuccessResponse:
+    branch = "feature/issue-8"
+    path = str(Path(default_worktree_base()) / "acme" / "example-repo" / "issue-8")
     return SuccessResponse(
         command=command,
-        data={"start_commit": start_commit, "head_commit": head_commit},
-        schema_version=1,
+        data={
+            "path": path,
+            "branch": branch,
+            "branch_ref": f"refs/heads/{branch}",
+            "start_commit": start_commit,
+            "head_commit": head_commit,
+            "worktree_registered": True,
+        },
+        schema_version=2,
     )
 
 
-def _error_response(code: str = "E001", message: str = "something broke") -> ErrorResponse:
+def _error_response(
+    code: str = "E001",
+    message: str = "something broke",
+    *,
+    data: dict[str, object] | None = None,
+) -> ErrorResponse:
     return ErrorResponse(
         command="worktree.create",
         error=ErrorData(code=code, message=message),
         schema_version=1,
+        data={} if data is None else data,
     )
 
 
@@ -250,11 +266,12 @@ class TestIssueToPrStepFailures:
         """An ErrorResponse from wh is treated as failure."""
         cfg = _make_config()
         mock_wh = MagicMock()
-        mock_wh.run.return_value = _error_response()
+        mock_wh.run.return_value = _error_response(data={"path": "/tmp/residual"})
 
         orch = IssueToPr(config=cfg, wh_client=mock_wh)
-        with pytest.raises(IssueToPrError, match="wh returned error"):
+        with pytest.raises(IssueToPrError, match="wh returned error") as exc_info:
             orch.run()
+        assert exc_info.value.data == {"path": "/tmp/residual"}
 
     @pytest.mark.parametrize(
         ("start_commit", "head_commit", "message"),
@@ -296,8 +313,18 @@ class TestIssueToPrStepFailures:
         result = IssueToPr(config=_make_config(start_point=TEST_COMMIT), wh_client=mock_wh).run()
         assert result.start_commit == TEST_COMMIT
 
+    @pytest.mark.parametrize("commit", ["a" * 40, "b" * 64])
+    @patch("worktrees_hives.issue_to_pr.subprocess.run")
+    def test_uppercase_full_sha_is_normalized_before_dispatch(self, mock_run, commit: str) -> None:
+        mock_wh = MagicMock()
+        mock_wh.run.return_value = _success_response(start_commit=commit, head_commit=commit)
+        mock_run.side_effect = _happy_side_effect()
+        result = IssueToPr(config=_make_config(start_point=commit.upper()), wh_client=mock_wh).run()
+        assert result.start_commit == commit
+        assert mock_wh.run.call_args.args[7] == commit
+
     def test_rejects_abbreviated_sha_request(self) -> None:
-        with pytest.raises(IssueToPrError, match="full lowercase"):
+        with pytest.raises(IssueToPrError, match="full 40- or 64-character"):
             IssueToPr(config=_make_config(start_point="abc1234"), wh_client=MagicMock())
 
     @patch("worktrees_hives.issue_to_pr.subprocess.run")
@@ -644,7 +671,7 @@ class TestNeverMergeSafety:
 
 
 class TestWhCreateCliShape:
-    """worktree create must match foundation clap positionals."""
+    """worktree create must select v2 and match the published clap shape."""
 
     @patch("worktrees_hives.issue_to_pr.subprocess.run")
     def test_wh_create_cli_shape(self, mock_run):
@@ -654,19 +681,19 @@ class TestWhCreateCliShape:
         mock_run.side_effect = _happy_side_effect("https://github.com/acme/example-repo/pull/1\n")
         IssueToPr(config=cfg, wh_client=mock_wh).run()
         args = mock_wh.run.call_args[0]
-        assert args[0:3] == ("worktree", "create", "--repo")
-        assert args[3] == "/tmp/repo"
-        assert args[4:6] == ("--start-point", "origin/main")
-        assert args[6] == "acme"
-        assert args[7] == "example-repo"
-        assert args[8] == "issue-8"
-        assert args[9] == "feature/issue-8"
+        assert args[0:4] == ("worktree", "create", "--schema-version", "2")
+        assert args[4:6] == ("--repo", "/tmp/repo")
+        assert args[6:8] == ("--start-point", "origin/main")
+        assert args[8] == "acme"
+        assert args[9] == "example-repo"
+        assert args[10] == "issue-8"
+        assert args[11] == "feature/issue-8"
         # Old flag shape must not be used
         assert "--issue" not in args
         assert "--path" not in args
 
     @patch("worktrees_hives.issue_to_pr.subprocess.run")
-    def test_start_point_is_delegated_without_raw_branch_mutation(self, mock_run):
+    def test_exact_start_point_uses_wh_without_git_branch_subprocess(self, mock_run):
         cfg = _make_config(
             base_branch="release/1.0",
             start_point="origin/release/1.0",
@@ -684,7 +711,7 @@ class TestWhCreateCliShape:
         ]
         IssueToPr(config=cfg, wh_client=mock_wh).run()
         wh_args = mock_wh.run.call_args[0]
-        assert wh_args[4:6] == ("--start-point", "origin/release/1.0")
+        assert wh_args[6:8] == ("--start-point", "origin/release/1.0")
         assert all("branch" not in call[0][0] for call in mock_run.call_args_list)
         gh_cmd = _gh_cmd_from_calls(mock_run)
         assert gh_cmd[gh_cmd.index("--base") + 1] == "release/1.0"

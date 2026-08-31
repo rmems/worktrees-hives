@@ -48,21 +48,29 @@ fn init_repo(root: &Path) -> PathBuf {
     repo
 }
 
-fn wh_create(root: &Path, repo: &Path, job: &str, branch: &str, start: &str) -> Output {
+struct CreateRequest<'a> {
+    job: &'a str,
+    branch: &'a str,
+    start: &'a str,
+}
+
+fn wh_create(root: &Path, repo: &Path, request: CreateRequest<'_>) -> Output {
     Command::new(env!("CARGO_BIN_EXE_wh"))
         .env("WH_WORKTREE_BASE", root.join("worktrees"))
         .args([
             "--json",
             "worktree",
             "create",
+            "--schema-version",
+            "2",
             "--repo",
             repo.to_str().unwrap(),
             "--start-point",
-            start,
+            request.start,
             "acme",
             "sample",
-            job,
-            branch,
+            request.job,
+            request.branch,
         ])
         .output()
         .unwrap()
@@ -78,57 +86,172 @@ fn json(output: &Output) -> serde_json::Value {
     })
 }
 
+fn assert_error_envelope(
+    output: &Output,
+    expected_exit: i32,
+    expected_schema: u64,
+    expected_code: &str,
+) -> serde_json::Value {
+    let envelope = json(output);
+    assert_eq!(output.status.code(), Some(expected_exit));
+    assert_eq!(
+        serde_json::json!({
+            "ok": false,
+            "schema_version": expected_schema,
+            "command": "worktree.create",
+            "error_code": expected_code,
+        }),
+        serde_json::json!({
+            "ok": envelope["ok"],
+            "schema_version": envelope["schema_version"],
+            "command": envelope["command"],
+            "error_code": envelope["error"]["code"],
+        })
+    );
+    envelope
+}
+
 #[test]
-fn invalid_start_point_emits_v1_error_envelope_with_exit_1() {
+fn legacy_v1_create_fails_with_machine_readable_upgrade_error_without_mutation() {
+    let root = TestDir::new();
+    let repo = init_repo(&root.0);
+    let output = Command::new(env!("CARGO_BIN_EXE_wh"))
+        .env("WH_WORKTREE_BASE", root.0.join("worktrees"))
+        .args([
+            "--json",
+            "worktree",
+            "create",
+            "--repo",
+            repo.to_str().unwrap(),
+            "acme",
+            "sample",
+            "legacy",
+            "feature/legacy",
+        ])
+        .output()
+        .unwrap();
+    let envelope = assert_error_envelope(&output, 1, 1, "CONTRACT_UPGRADE_REQUIRED");
+
+    assert_eq!(envelope["data"]["required_schema_version"], 2);
+    assert!(!root.0.join("worktrees/acme/sample/legacy").exists());
+    assert!(
+        git(&repo, &["branch", "--list", "feature/legacy"])
+            .trim()
+            .is_empty()
+    );
+}
+
+#[test]
+fn v2_create_without_start_point_fails_with_machine_readable_error_without_mutation() {
+    let root = TestDir::new();
+    let repo = init_repo(&root.0);
+    let output = Command::new(env!("CARGO_BIN_EXE_wh"))
+        .env("WH_WORKTREE_BASE", root.0.join("worktrees"))
+        .args([
+            "--json",
+            "worktree",
+            "create",
+            "--schema-version",
+            "2",
+            "--repo",
+            repo.to_str().unwrap(),
+            "acme",
+            "sample",
+            "missing",
+            "feature/missing",
+        ])
+        .output()
+        .unwrap();
+    assert_error_envelope(&output, 1, 2, "START_POINT_REQUIRED");
+
+    assert!(!root.0.join("worktrees/acme/sample/missing").exists());
+    assert!(
+        git(&repo, &["branch", "--list", "feature/missing"])
+            .trim()
+            .is_empty()
+    );
+}
+
+#[test]
+fn invalid_start_point_emits_v2_error_envelope_with_exit_1() {
     let root = TestDir::new();
     let repo = init_repo(&root.0);
 
     let output = wh_create(
         &root.0,
         &repo,
-        "invalid",
-        "feature/invalid",
-        "does-not-exist",
+        CreateRequest {
+            job: "invalid",
+            branch: "feature/invalid",
+            start: "does-not-exist",
+        },
     );
-    let envelope = json(&output);
+    let envelope = assert_error_envelope(&output, 1, 2, "GIT_COMMAND_FAILED");
 
-    assert_eq!(output.status.code(), Some(1));
-    assert_eq!(envelope["ok"], false);
-    assert_eq!(envelope["schema_version"], 1);
-    assert_eq!(envelope["command"], "worktree.create");
     assert_eq!(envelope["data"], serde_json::json!({}));
-    assert_eq!(envelope["error"]["code"], "GIT_COMMAND_FAILED");
 }
 
 #[test]
-fn existing_branch_policy_emits_v1_error_envelope_with_exit_2() {
+fn existing_branch_policy_emits_v2_error_envelope_with_exit_2() {
     let root = TestDir::new();
     let repo = init_repo(&root.0);
     let start = git(&repo, &["rev-parse", "HEAD"]);
     git(&repo, &["branch", "feature/existing", &start]);
 
-    let output = wh_create(&root.0, &repo, "existing", "feature/existing", &start);
-    let envelope = json(&output);
-
-    assert_eq!(output.status.code(), Some(2));
-    assert_eq!(envelope["ok"], false);
-    assert_eq!(envelope["command"], "worktree.create");
-    assert_eq!(envelope["error"]["code"], "WORKTREE_RESUME_UNPROVEN");
+    let output = wh_create(
+        &root.0,
+        &repo,
+        CreateRequest {
+            job: "existing",
+            branch: "feature/existing",
+            start: &start,
+        },
+    );
+    assert_error_envelope(&output, 2, 2, "WORKTREE_RESUME_UNPROVEN");
 }
 
 #[test]
-fn success_reports_matching_start_and_verified_head_commits() {
+fn v2_success_reports_verified_path_ref_commit_and_registration_identity() {
     let root = TestDir::new();
     let repo = init_repo(&root.0);
     let start = git(&repo, &["rev-parse", "HEAD"]);
 
-    let output = wh_create(&root.0, &repo, "success", "feature/success", &start);
+    let output = wh_create(
+        &root.0,
+        &repo,
+        CreateRequest {
+            job: "success",
+            branch: "feature/success",
+            start: &start,
+        },
+    );
     let envelope = json(&output);
 
     assert!(output.status.success());
-    assert_eq!(envelope["ok"], true);
-    assert_eq!(envelope["data"]["start_commit"], start);
-    assert_eq!(envelope["data"]["head_commit"], start);
+    assert_eq!(
+        serde_json::json!({
+            "ok": true,
+            "schema_version": 2,
+            "path": root.0.join("worktrees/acme/sample/success"),
+            "branch": "feature/success",
+            "branch_ref": "refs/heads/feature/success",
+            "repo_root": repo,
+            "start_commit": start,
+            "head_commit": start,
+            "worktree_registered": true,
+        }),
+        serde_json::json!({
+            "ok": envelope["ok"],
+            "schema_version": envelope["schema_version"],
+            "path": envelope["data"]["path"],
+            "branch": envelope["data"]["branch"],
+            "branch_ref": envelope["data"]["branch_ref"],
+            "repo_root": envelope["data"]["repo_root"],
+            "start_commit": envelope["data"]["start_commit"],
+            "head_commit": envelope["data"]["head_commit"],
+            "worktree_registered": envelope["data"]["worktree_registered"],
+        })
+    );
 }
 
 #[test]
@@ -140,16 +263,31 @@ fn partial_create_failure_reports_residual_state_without_deleting_branch() {
     fs::create_dir_all(&target).unwrap();
     fs::write(target.join("occupied"), "keep\n").unwrap();
 
-    let output = wh_create(&root.0, &repo, "partial", "feature/partial", &start);
-    let envelope = json(&output);
+    let output = wh_create(
+        &root.0,
+        &repo,
+        CreateRequest {
+            job: "partial",
+            branch: "feature/partial",
+            start: &start,
+        },
+    );
+    let envelope = assert_error_envelope(&output, 1, 2, "WORKTREE_CREATE_FAILED");
 
-    assert_eq!(output.status.code(), Some(1));
-    assert_eq!(envelope["ok"], false);
-    assert_eq!(envelope["error"]["code"], "WORKTREE_CREATE_FAILED");
-    assert_eq!(envelope["data"]["branch_commit"], start);
-    assert_eq!(envelope["data"]["path_exists"], true);
-    assert_eq!(envelope["data"]["worktree_registered"], false);
-    assert_eq!(envelope["data"]["cleanup_performed"], false);
+    assert_eq!(
+        serde_json::json!({
+            "branch_commit": start,
+            "path_exists": true,
+            "worktree_registered": false,
+            "cleanup_performed": false,
+        }),
+        serde_json::json!({
+            "branch_commit": envelope["data"]["branch_commit"],
+            "path_exists": envelope["data"]["path_exists"],
+            "worktree_registered": envelope["data"]["worktree_registered"],
+            "cleanup_performed": envelope["data"]["cleanup_performed"],
+        })
+    );
     assert_eq!(
         git(&repo, &["rev-parse", "refs/heads/feature/partial"]),
         start

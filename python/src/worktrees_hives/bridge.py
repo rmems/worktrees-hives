@@ -1,7 +1,7 @@
 """Thin subprocess bridge to the `wh` CLI binary.
 
 The bridge locates ``wh`` via ``WH_BIN`` (environment variable) or ``PATH``,
-invokes it with ``--json``, and parses the v1 JSON envelope on stdout.
+invokes it with ``--json``, and parses the selected supported JSON envelope on stdout.
 
 **Layering:** Python never invokes ``git`` or ``gh`` directly for hive jobs, and
 never reimplements Rust-owned safety, worktree, path, or branch checks. All
@@ -26,6 +26,7 @@ from worktrees_hives.contract import (
 from worktrees_hives.errors import (
     PolicyError,
     WhBinaryNotFoundError,
+    WhContractVersionError,
     WhJsonDecodeError,
     WhProcessError,
     WhSchemaError,
@@ -152,13 +153,13 @@ class WhClient:
         WhBinaryNotFoundError
             If the ``wh`` binary cannot be located.
         WhProcessError
-            If ``wh`` exits non-zero without a usable v1 envelope.
+            If ``wh`` exits non-zero without a usable supported envelope.
         PolicyError
             If ``wh`` exits 2 with a structured policy error envelope.
         WhJsonDecodeError
             If stdout is not valid JSON when an envelope was required.
         WhSchemaError
-            If the decoded JSON does not match the v1 envelope.
+            If the decoded JSON does not match a supported envelope.
         """
         binary = _resolve_wh_binary(self._wh_path)
         cmd = [binary, "--json", *args]
@@ -183,7 +184,12 @@ class WhClient:
                 stderr=f"wh timed out after {self._timeout}s",
             ) from exc
 
-        return self._interpret(result.returncode, result.stdout, result.stderr)
+        return self._interpret(
+            result.returncode,
+            result.stdout,
+            result.stderr,
+            requested_schema_version=_requested_schema_version(args),
+        )
 
     def gh_safe(self, *args: str) -> SuccessResponse | ErrorResponse:
         """Run ``wh --json gh-safe <args>`` (Rust ``SafeGhCommand`` boundary)."""
@@ -207,6 +213,8 @@ class WhClient:
         returncode: int,
         stdout: str,
         stderr: str,
+        *,
+        requested_schema_version: int | None = None,
     ) -> SuccessResponse | ErrorResponse:
         """Map process exit + stdout to a typed envelope or raise."""
         stripped = stdout.strip()
@@ -217,15 +225,41 @@ class WhClient:
             except WhJsonDecodeError, WhSchemaError:
                 pass
             else:
+                if (
+                    requested_schema_version is not None
+                    and classified.schema_version != requested_schema_version
+                ):
+                    raise WhContractVersionError(
+                        requested_schema_version=requested_schema_version,
+                        returncode=returncode,
+                        stderr=(
+                            stderr.strip()
+                            or "wh returned schema version "
+                            f"{classified.schema_version} for a version "
+                            f"{requested_schema_version} request"
+                        ),
+                    )
                 if isinstance(classified, ErrorResponse) and returncode == 2:
                     raise PolicyError(
                         classified.error.code,
                         classified.error.message,
+                        data=classified.data,
                     )
                 # Success envelope — including gh-safe/git-safe child failures
                 # where process exit mirrors data.exit_code but ok is true.
                 # ErrorResponse on non-2 exits is returned as structured data.
                 return classified
+
+        if (
+            returncode != 0
+            and requested_schema_version is not None
+            and _schema_selector_is_unsupported(stderr)
+        ):
+            raise WhContractVersionError(
+                requested_schema_version=requested_schema_version,
+                returncode=returncode,
+                stderr=stderr.strip(),
+            )
 
         if returncode == 2:
             # Policy path without a usable envelope (same as #57).
@@ -244,7 +278,7 @@ class WhClient:
 
     @staticmethod
     def _parse(raw_stdout: str) -> SuccessResponse | ErrorResponse:
-        """Decode and validate the v1 JSON envelope from stdout."""
+        """Decode and validate a supported JSON envelope from stdout."""
         stripped = raw_stdout.strip()
         if not stripped:
             raise WhJsonDecodeError(raw_stdout, cause=ValueError("empty output"))
@@ -256,3 +290,33 @@ class WhClient:
 
         response = Response.from_dict(parsed)
         return classify(response)
+
+
+def _requested_schema_version(args: tuple[str, ...]) -> int | None:
+    """Return the boundary selected by ``worktree create``, if present."""
+    if args[:2] != ("worktree", "create"):
+        return None
+    for index, arg in enumerate(args[2:], start=2):
+        if arg == "--":
+            break
+        if arg == "--schema-version":
+            try:
+                return int(args[index + 1])
+            except ValueError, IndexError:
+                return None
+        if arg.startswith("--schema-version="):
+            _, _, value = arg.partition("=")
+            try:
+                return int(value)
+            except ValueError:
+                return None
+    return None
+
+
+def _schema_selector_is_unsupported(stderr: str) -> bool:
+    """Recognize the legacy clap failure for the unknown v2 selector."""
+    normalized = stderr.casefold()
+    return "--schema-version" in normalized and any(
+        marker in normalized
+        for marker in ("unexpected argument", "unknown argument", "unrecognized option")
+    )

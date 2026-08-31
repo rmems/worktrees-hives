@@ -236,12 +236,27 @@ def cmd_check(args: argparse.Namespace) -> int:
 # ---------------------------------------------------------------------------
 
 
-def _fail(command: str, code: str, message: str, *, as_json: bool, exit_code: int) -> int:
+def _fail(
+    command: str,
+    code: str,
+    message: str,
+    *,
+    as_json: bool,
+    exit_code: int,
+    data: dict[str, object] | None = None,
+) -> int:
     """Report a failure on stderr and, under --json, as an error envelope."""
     print(f"Error: {message}", file=sys.stderr)
     if as_json:
         print(
-            json.dumps(_envelope(command, {}, ok=False, error={"code": code, "message": message}))
+            json.dumps(
+                _envelope(
+                    command,
+                    dict(data or {}),
+                    ok=False,
+                    error={"code": code, "message": message},
+                )
+            )
         )
     return exit_code
 
@@ -257,7 +272,14 @@ def _guard(command: str, as_json: bool, fn: Callable[[], int]) -> int:
     try:
         return fn()
     except PolicyError as e:
-        return _fail(command, e.code, e.message, as_json=as_json, exit_code=2)
+        return _fail(
+            command,
+            e.code,
+            e.message,
+            as_json=as_json,
+            exit_code=2,
+            data=e.data,
+        )
     except OwnerPolicyError as e:
         return _fail(command, "OWNER_NOT_ALLOWED", str(e), as_json=as_json, exit_code=2)
     except (ValueError, OSError, RuntimeError, subprocess.SubprocessError) as e:
@@ -529,11 +551,18 @@ def cmd_lab_run(args: argparse.Namespace) -> int:
             msg = str(e)
             # Owner allowlist / deny-by-default is policy (exit 2).
             if "allowlist" in msg.lower() or "deny-by-default" in msg.lower():
-                raise PolicyError("OWNER_NOT_ALLOWED", msg) from e
+                raise PolicyError("OWNER_NOT_ALLOWED", msg, data=e.data) from e
             # Rust policy rejections wrapped as prose still map to exit 2.
             if "wh policy rejection" in msg.lower():
-                raise PolicyError("WH_POLICY", msg) from e
-            return _fail("lab.run", "LAB_JOB_ERROR", msg, as_json=as_json, exit_code=1)
+                raise PolicyError("WH_POLICY", msg, data=e.data) from e
+            return _fail(
+                "lab.run",
+                e.code,
+                msg,
+                as_json=as_json,
+                exit_code=1,
+                data=e.data,
+            )
         except FindingsValidationError as e:
             return _fail("lab.run", "FINDINGS_INVALID", str(e), as_json=as_json, exit_code=1)
 
@@ -571,6 +600,75 @@ def cmd_lab_run(args: argparse.Namespace) -> int:
         return 0 if result.ok else 1
 
     return _guard("lab.run", as_json, run)
+
+
+def _add_lab_parser(
+    sub: argparse._SubParsersAction[argparse.ArgumentParser],
+) -> None:
+    lab_p = sub.add_parser(
+        "lab",
+        help="Hypothesis lab (allocate worktrees, enforce findings; never merges)",
+    )
+    lab_sub = lab_p.add_subparsers(dest="lab_command", required=True)
+    run_p = lab_sub.add_parser(
+        "run",
+        help="Single hypothesis unit: allocate worktree + require findings pair",
+    )
+    run_p.add_argument("--owner", required=True, help="Repository owner (allowlisted)")
+    run_p.add_argument("--repo", required=True, help="Repository name")
+    run_p.add_argument(
+        "--start-point",
+        required=True,
+        help="Commit or ref at which the new lab branch must be created",
+    )
+    run_p.add_argument(
+        "--hypothesis-id",
+        required=True,
+        help="Hypothesis identifier (maps to lab job / findings)",
+    )
+    run_p.add_argument("--agent-id", required=True, help="Agent or subagent id")
+    run_p.add_argument(
+        "--role",
+        choices=[r.value for r in AgentRole],
+        default=AgentRole.AGENT.value,
+        help="agent or subagent (default: agent)",
+    )
+    run_p.add_argument("--branch", help="Branch for the lab worktree (default: lab/<hypothesis>)")
+    run_p.add_argument("--job-id", help="Explicit lab job id (default: lab-<hypothesis>)")
+    run_p.add_argument(
+        "--command",
+        dest="run_command",
+        help=(
+            "Optional command run inside the worktree after allocate "
+            "(shlex-split; no shell). Merge and all force-push forms denied "
+            "(including --force-with-lease and +refspec); use "
+            "wh git-safe --expected-branch for controlled lease pushes. "
+            "dest=run_command so it does not clobber the top-level subcommand dest."
+        ),
+    )
+    run_p.add_argument(
+        "--command-timeout",
+        type=float,
+        default=3600.0,
+        help="Seconds before --command is killed (default: 3600; must be > 0)",
+    )
+    run_p.add_argument(
+        "--teardown-on-error",
+        action="store_true",
+        help="Tear down the lab job if command or findings validation fails",
+    )
+    run_p.add_argument(
+        "--worktree-base",
+        help="Override WH_WORKTREE_BASE for path layout",
+    )
+    run_p.add_argument(
+        "--repo-root",
+        help="Local git root for wh worktree create (default: cwd)",
+    )
+    run_p.add_argument(
+        "--lab-jobs-path",
+        help="Override WH_LAB_JOBS_PATH store file",
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -679,72 +777,8 @@ def main(argv: list[str] | None = None) -> int:
         help="Skip owner allowlist filtering",
     )
 
-    # lab
-    lab_p = sub.add_parser(
-        "lab",
-        help="Hypothesis lab (allocate worktrees, enforce findings; never merges)",
-    )
-    lab_sub = lab_p.add_subparsers(dest="lab_command", required=True)
-
-    run_p = lab_sub.add_parser(
-        "run",
-        help="Single hypothesis unit: allocate worktree + require findings pair",
-    )
-    run_p.add_argument("--owner", required=True, help="Repository owner (allowlisted)")
-    run_p.add_argument("--repo", required=True, help="Repository name")
-    run_p.add_argument(
-        "--start-point",
-        required=True,
-        help="Commit or ref at which the new lab branch must be created",
-    )
-    run_p.add_argument(
-        "--hypothesis-id",
-        required=True,
-        help="Hypothesis identifier (maps to lab job / findings)",
-    )
-    run_p.add_argument("--agent-id", required=True, help="Agent or subagent id")
-    run_p.add_argument(
-        "--role",
-        choices=[r.value for r in AgentRole],
-        default=AgentRole.AGENT.value,
-        help="agent or subagent (default: agent)",
-    )
-    run_p.add_argument("--branch", help="Branch for the lab worktree (default: lab/<hypothesis>)")
-    run_p.add_argument("--job-id", help="Explicit lab job id (default: lab-<hypothesis>)")
-    run_p.add_argument(
-        "--command",
-        dest="run_command",
-        help=(
-            "Optional command run inside the worktree after allocate "
-            "(shlex-split; no shell). Merge and all force-push forms denied "
-            "(including --force-with-lease and +refspec); use "
-            "wh git-safe --expected-branch for controlled lease pushes. "
-            "dest=run_command so it does not clobber the top-level subcommand dest."
-        ),
-    )
-    run_p.add_argument(
-        "--command-timeout",
-        type=float,
-        default=3600.0,
-        help="Seconds before --command is killed (default: 3600; must be > 0)",
-    )
-    run_p.add_argument(
-        "--teardown-on-error",
-        action="store_true",
-        help="Tear down the lab job if command or findings validation fails",
-    )
-    run_p.add_argument(
-        "--worktree-base",
-        help="Override WH_WORKTREE_BASE for path layout",
-    )
-    run_p.add_argument(
-        "--repo-root",
-        help="Local git root for wh worktree create (default: cwd)",
-    )
-    run_p.add_argument(
-        "--lab-jobs-path",
-        help="Override WH_LAB_JOBS_PATH store file",
-    )
+    # lab (hypothesis lab)
+    _add_lab_parser(sub)
 
     args = parser.parse_args(argv)
 

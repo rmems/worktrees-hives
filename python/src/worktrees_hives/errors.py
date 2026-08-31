@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 
 class WhError(Exception):
     """Base exception for all wh CLI errors."""
@@ -27,6 +29,16 @@ class WhProcessError(WhError):
         super().__init__(f"wh exited with code {returncode}: {stderr}")
 
 
+class WhContractVersionError(WhProcessError):
+    """Raised when a requested boundary version is unsupported by ``wh``."""
+
+    code = "CONTRACT_VERSION_UNSUPPORTED"
+
+    def __init__(self, requested_schema_version: int, returncode: int, stderr: str) -> None:
+        self.requested_schema_version = requested_schema_version
+        super().__init__(returncode=returncode, stderr=stderr)
+
+
 class WhJsonDecodeError(WhError):
     """Raised when wh output is not valid JSON."""
 
@@ -37,18 +49,25 @@ class WhJsonDecodeError(WhError):
 
 
 class WhSchemaError(WhError):
-    """Raised when the wh response envelope does not match the v1 schema."""
+    """Raised when the wh response envelope does not match a supported schema."""
 
     def __init__(self, detail: str) -> None:
-        super().__init__(f"Invalid v1 envelope: {detail}")
+        super().__init__(f"Invalid wh envelope: {detail}")
 
 
 class PolicyError(WhError):
     """Raised when wh exits with code 2 (policy violation)."""
 
-    def __init__(self, code: str, message: str) -> None:
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        data: dict[str, Any] | None = None,
+    ) -> None:
         self.code = code
         self.message = message
+        self.data = dict(data or {})
         super().__init__(f"Policy violation [{code}]: {message}")
 
 

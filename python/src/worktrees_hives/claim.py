@@ -28,7 +28,8 @@ from typing import TYPE_CHECKING
 from worktrees_hives.contract import (
     ErrorResponse,
     SuccessResponse,
-    require_verified_worktree_commits,
+    WorktreeCreateRequest,
+    parse_verified_worktree_creation,
     validate_start_point_request,
 )
 from worktrees_hives.errors import (
@@ -49,7 +50,7 @@ _SEGMENT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 # Branch / ref: plain git-ish names, no leading dash.
 _REF_RE = re.compile(r"^(?!-)[A-Za-z0-9][A-Za-z0-9._/-]*$")
 # Commit id supplied by the caller for an exact PR-head start point.
-_SHA_RE = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
+_SHA_RE = re.compile(r"^(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})$")
 
 
 def _load_allowed_owners_from_env() -> frozenset[str]:
@@ -64,6 +65,10 @@ def _load_allowed_owners_from_env() -> frozenset[str]:
 
 class ClaimError(WhError):
     """Raised when a claim operation fails at the orchestration layer."""
+
+    def __init__(self, detail: str, *, data: dict[str, object] | None = None) -> None:
+        self.data = dict(data or {})
+        super().__init__(detail)
 
 
 class ClaimExistsError(ClaimError):
@@ -138,7 +143,7 @@ class ClaimManager:
         if issue_number <= 0:
             raise ClaimError(f"issue_number must be positive, got {issue_number}")
         _validate_ref("base_ref", base_ref)
-        _validate_start_point("base_ref", base_ref)
+        base_ref = _validate_start_point("base_ref", base_ref)
         _validate_segment("owner", owner)
         _validate_segment("repo", repo)
         self._assert_owner_allowed(owner)
@@ -149,7 +154,15 @@ class ClaimManager:
         worktree_path = self.derive_path(owner, repo, job_id)
         self._assert_not_exists(worktree_path)
 
-        path, returned_branch, start_commit = self._wh_create(owner, repo, job_id, branch, base_ref)
+        path, returned_branch, start_commit = self._wh_create(
+            WorktreeCreateRequest(
+                owner=owner,
+                repo=repo,
+                job_id=job_id,
+                branch=branch,
+                start_point=base_ref,
+            )
+        )
         self._check_isolation(path, returned_branch, branch)
 
         return ClaimResult(
@@ -182,6 +195,7 @@ class ClaimManager:
         _validate_ref("head_branch", head_branch)
         if not _SHA_RE.fullmatch(head_sha):
             raise ClaimError(f"invalid head_sha shape: {head_sha!r}")
+        head_sha = head_sha.lower()
         if head_repo is not None:
             # owner/repo slug for documentation; create still targets base repo root.
             if "/" not in head_repo:
@@ -195,7 +209,13 @@ class ClaimManager:
         self._assert_not_exists(worktree_path)
 
         path, returned_branch, start_commit = self._wh_create(
-            owner, repo, job_id, head_branch, head_sha
+            WorktreeCreateRequest(
+                owner=owner,
+                repo=repo,
+                job_id=job_id,
+                branch=head_branch,
+                start_point=head_sha,
+            )
         )
         self._check_isolation(path, returned_branch, head_branch)
 
@@ -251,43 +271,24 @@ class ClaimManager:
     # wh bridge
     # ------------------------------------------------------------------
 
-    def _wh_create(
-        self,
-        owner: str,
-        repo: str,
-        job_id: str,
-        branch: str,
-        start_point: str,
-    ) -> tuple[str, str, str]:
+    def _wh_create(self, request: WorktreeCreateRequest) -> tuple[str, str, str]:
         """Invoke ``wh worktree create`` and return path, branch, exact commit."""
-        resp = self._wh_run(
-            "worktree",
-            "create",
-            "--repo",
-            self.repo_root,
-            "--start-point",
-            start_point,
-            owner,
-            repo,
-            job_id,
-            branch,
-        )
+        resp = self._wh_run(*request.cli_args(self.repo_root))
         if not isinstance(resp, SuccessResponse):
-            raise ClaimError(f"wh worktree create failed: {resp.error.code}: {resp.error.message}")
+            raise ClaimError(
+                f"wh worktree create failed: {resp.error.code}: {resp.error.message}",
+                data=resp.data,
+            )
         try:
-            start_commit = require_verified_worktree_commits(
-                resp.data, requested_start_point=start_point
+            creation = parse_verified_worktree_creation(
+                resp.data,
+                requested_start_point=request.start_point,
+                expected_path=self.derive_path(request.owner, request.repo, request.job_id),
+                expected_branch=request.branch,
             )
         except WhError as exc:
             raise ClaimError(f"invalid wh worktree.create response: {exc}") from exc
-        path = resp.data.get("path")
-        ret_branch = resp.data.get("branch")
-        if not isinstance(path, str) or not path:
-            # Fall back to derived path if envelope omits path.
-            path = self.derive_path(owner, repo, job_id)
-        if not isinstance(ret_branch, str) or not ret_branch:
-            ret_branch = branch
-        return path, ret_branch, start_commit
+        return creation.path, creation.branch, creation.start_commit
 
     def _wh_run(self, *args: str) -> SuccessResponse | ErrorResponse:
         try:
@@ -298,7 +299,9 @@ class ClaimManager:
                 f"(isolation requires Rust worktree CLI): {exc}"
             ) from exc
         except PolicyError as exc:
-            raise ClaimError(f"wh policy rejection [{exc.code}]: {exc.message}") from exc
+            raise ClaimError(
+                f"wh policy rejection [{exc.code}]: {exc.message}", data=exc.data
+            ) from exc
         except WhProcessError as exc:
             raise ClaimError(f"wh exited {exc.returncode}: {exc.stderr or 'no stderr'}") from exc
         except WhError as exc:
@@ -354,8 +357,8 @@ def _validate_ref(field_name: str, value: str) -> None:
         )
 
 
-def _validate_start_point(field_name: str, value: str) -> None:
+def _validate_start_point(field_name: str, value: str) -> str:
     try:
-        validate_start_point_request(value)
+        return validate_start_point_request(value)
     except WhError as exc:
         raise ClaimError(f"invalid {field_name}: {exc}") from exc
