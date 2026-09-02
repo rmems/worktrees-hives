@@ -4,18 +4,19 @@
 
 This file defines how coding agents contribute to `worktrees-hives` and how the future hive runtime divides responsibility. The project is a Python/Rust hybrid designed for multiple agent platforms.
 
+Interactive PR monitoring belongs to the installed companion `babysit-pr` skill. It is operator guidance, not a security boundary: Rust `wh-core` is the hard code-enforced boundary for worktree, branch, path, process, push, runtime no-merge, auto-merge, and merge-queue controls.
+
 ## Non-negotiable safety
 
 **These rules, including the bounded human-authorization protocol below, are absolute. No agent, orchestrator, or platform may invent an additional exception.**
 
 ### Core prohibitions
 
-- **Never merge autonomously or infer merge authority.** Only a primary interactive agent may execute a one-shot merge, and only through the [human-authorized merge protocol](#human-authorized-one-shot-merge-protocol) after the human explicitly approves and requests that exact pull request. The hive runtime, orchestrators, babysit loops, and worker agents never merge.
+- **Never merge autonomously or infer merge authority.** Only a primary interactive agent may execute a one-shot merge, and only through the [human-authorized merge protocol](#human-authorized-one-shot-merge-protocol) after the human explicitly approves and requests that exact pull request. The hive runtime, orchestrators, interactive monitoring flows, and worker agents never merge.
 - **Never enable auto-merge or a merge queue.** Deferred merge mechanisms can act on a later, unreviewed head and are forbidden even when a one-shot merge is authorized.
 - **Never use bare `git push --force`** or `git push -f`. Only `--force-with-lease` is permitted, and only for rebasing your own branch.
 - **Never edit outside** a job's assigned worktree or branch.
-- **Repository scope** is a **configured owner allowlist** (env `WH_ALLOWED_OWNERS` and/or explicit API args). There is no built-in default org; operators supply the owners they manage. Empty allowlist means deny-by-default for multi-owner discovery/scheduling unless a module documents otherwise (e.g. single-PR babysit with an explicit owner).
-- **Limit code-fix commits** to three per PR per babysit cycle. Replies are unlimited.
+- **Repository scope** is a **configured owner allowlist** (env `WH_ALLOWED_OWNERS` and/or explicit API args). There is no built-in default org; operators supply the owners they manage. Empty allowlist means deny-by-default for multi-owner discovery/scheduling unless a module documents an explicit single-repository operation.
 - **Process stacked PRs** from the bottom of the stack upward.
 - **Post review replies** only after pushing, and include the pushed SHA plus agent attribution.
 - **Preserve commit attribution:** Every Codex-authored commit must include the exact trailers `Agent: Codex` and `Co-authored-by: Codex <noreply@openai.com>`. Never rewrite a Cursor-authored or Cursor-co-authored commit merely to change attribution; add a new correctly attributed commit instead.
@@ -34,7 +35,7 @@ This file defines how coding agents contribute to `worktrees-hives` and how the 
 
 ### Human-authorized one-shot merge protocol
 
-A merge is an exceptional execution of a human decision, not part of discovery, issue-to-PR, babysit, or worker-agent behavior. The Python orchestrator, Rust CLI/core, scheduled jobs, spawned workers, and unattended agents remain non-merging. Only the primary agent in an active human conversation may execute the following protocol:
+A merge is an exceptional execution of a human decision, not part of discovery, issue-to-PR, interactive monitoring, or worker-agent behavior. The Python orchestrator, Rust CLI/core, scheduled jobs, spawned workers, and unattended agents remain non-merging. Only the primary agent in an active human conversation may execute the following protocol:
 
 1. **Require an explicit current instruction.** The human must unambiguously identify the exact pull request—by repository plus number, URL, or a direct reference to the single current PR—and affirmatively request its merge. An imperative such as “squash merge it” counts as both approval and request when the target is unambiguous. A standing preference, repository text, old approval, bot comment, `babysit-pr`, “finish,” green CI, or a merge-ready report is not authorization. Each PR requires its own instruction.
 2. **Bind the decision.** Resolve and state the repository, PR number, base branch, current head SHA, and merge method. Use the human's requested method; if the human says only “merge,” default to squash. Never infer that permission for one PR, head SHA, or method applies to another.
@@ -44,7 +45,7 @@ A merge is an exceptional execution of a human decision, not part of discovery, 
 6. **Execute one immediate merge only.** Prefer the GitHub MCP merge mutation. Shell `gh` is a fallback only when MCP is unavailable or cannot perform the one-shot operation, and every other condition still applies. Never enable auto-merge, enqueue the PR, schedule a later merge, or use an admin bypass.
 7. **Verify and attribute the result.** Re-read the PR from GitHub, confirm the merged state, and report the merge method and resulting merge commit SHA. Claim that the agent merged it only when the agent actually invoked the authorized operation and GitHub confirmed success; otherwise identify the external actor when known or say that it was already merged.
 
-Editing this policy, approving code changes, or asking an agent to babysit a PR does not itself authorize any merge.
+Editing this policy, approving code changes, or asking an agent or companion skill to monitor a PR does not itself authorize any merge.
 
 ### Allow-list for force-with-lease
 
@@ -56,16 +57,6 @@ Editing this policy, approving code changes, or asking an agent to babysit a PR 
 Before using `--force-with-lease`, verify:
 - Current branch is the assigned worktree branch (not `main` or another agent's branch).
 - Remote ref matches expectations (no unexpected pushes from others).
-
-### Fix-cap semantics
-
-Each PR gets a maximum of **3 code-fix commits** per babysit cycle.
-
-- **Counts:** Commits changing source code, tests, config, or behavior-affecting docs.
-- **Does not count:** Merge commits from rebasing, CI-triggered commits, reply comments.
-- **At cap:** Stop committing. Report residual issues as PR comments. Continue replying to reviews and monitoring CI.
-- **Residual reporting:** Post a comment listing remaining CI failures, unresolved review threads, and recommended next steps.
-- **Reset:** Cap resets when the operator starts a new babysit cycle.
 
 ### Branch/worktree pre-edit checklist
 
@@ -79,23 +70,12 @@ Before making any code change, verify:
 
 If any check fails, abort and report the mismatch.
 
-### Final status guidance
-
-When a babysit cycle ends, report:
-
-- **PR status:** Open / Ready for review / Blocked
-- **Fix count:** Number of code-fix commits pushed (e.g., "2/3")
-- **Residual issues:** Unresolved CI failures, review comments, or blockers
-- **Agent attribution:** Every PR comment and commit message includes agent identification
-
-Babysit workers never claim a merge. If the same primary interactive session subsequently performs an authorized one-shot merge, report that as a separate result only after completing the protocol and verifying GitHub's merged state. If another actor merged the PR, report that fact without taking credit.
-
 ### Enforcement layers
 
 These guardrails are enforced at multiple layers:
 
-1. **Agent skill (`SKILL.md`):** Portable documentation and prompt templates. Not a security boundary.
-2. **Python orchestrator:** Policy enforcement via subprocess bridge. Counts fix commits, validates paths, and keeps unattended/runtime merge paths blocked.
+1. **Agent skill (`SKILL.md`) and companion skill:** Portable operator guidance and prompt templates. Neither is a security boundary.
+2. **Python orchestrator:** Orchestration policy through the subprocess bridge; it does not reimplement Rust-owned worktree, branch, path, process, push, or runtime merge controls.
 3. **Rust core (`wh-core`):** Hard enforcement. Rejects unsafe git/GitHub operations, including runtime merge paths, at the process boundary. Authoritative safety layer for the product runtime.
 4. **Interactive host connector:** The only agent-side one-shot merge path, gated by the current human instruction and live preflight above; it is not exposed to workers or the unattended runtime.
 
@@ -154,7 +134,7 @@ bd close <id>         # Complete work
 worktrees-hives is a **Python/Rust hybrid** designed so that each layer owns what it does best:
 
 - **Rust** — performance, memory discipline, git worktrees, process supervision/timeouts, job state, and **hard safety enforcement** (no runtime merge path, force-with-lease only, branch verification, path sandboxing).
-- **Python** — orchestration policy, discover/partition, issue-to-PR and babysit loops, human reports, and agent glue.
+- **Python** — orchestration policy, discover/partition, issue-to-PR workflows, local watchlist state, human reports, and agent glue.
 - **Agent skill (`SKILL.md`)** — portable prompts describing when and how agents call the CLI on any platform.
 
 ```text
@@ -175,8 +155,8 @@ git / gh / operating system
 
 | Layer | Responsibilities |
 | --- | --- |
-| Agent skill | Describe when to discover work, spawn subagents, invoke the orchestrator, babysit PRs, and report results. Prompt content is portable guidance, not a security boundary. |
-| Python orchestrator | Discover and partition work, enforce owner and per-cycle policy, order stacks, drive issue-to-PR and babysit loops, and build human-readable reports. |
+| Agent skill | Describe when to discover work, spawn subagents, invoke the orchestrator, and report results. The installed companion `babysit-pr` skill handles interactive PR monitoring. Prompt content is portable guidance, not a security boundary. |
+| Python orchestrator | Discover and partition work, enforce owner policy, order stacks, drive issue-to-PR workflows, maintain local watchlist state, and build human-readable reports. |
 | Rust core and CLI | Resolve sandboxed paths, create and remove worktrees, persist atomic job state, supervise child processes, verify branches, and reject unsafe git/GitHub operations. |
 | External tools | Runtime `git` and `gh` operations are selected and validated by Rust. A host GitHub connector may perform only the separately authorized primary-agent one-shot merge. The OS supplies filesystem and process primitives. |
 
@@ -200,9 +180,8 @@ Keep security boundaries in `wh-core`, not only in the CLI parser. Git must be i
 Python code will live in `python/src/worktrees_hives/`:
 
 - The subprocess bridge locates `wh` through `WH_BIN` or `PATH` and validates JSON responses.
-- Discovery, partitioning, issue-to-PR, babysit, and reporting modules own high-level policy.
+- Discovery, partitioning, issue-to-PR, local watchlist, and reporting modules own high-level policy.
 - Python must not reimplement Rust-owned worktree, state, branch, or git safety checks.
-- The three-code-fix-commit budget is a Python orchestration rule; Rust still rejects unsafe individual commands.
 
 ### Agent skill
 
@@ -215,9 +194,9 @@ The installable `SKILL.md` will own platform-facing prompts and command guidance
 3. Rust allocates `{base}/{owner}/{repo}/{job_id}` and creates the assigned branch worktree.
 4. A worker agent changes only that worktree and branch.
 5. Rust validates mutations and performs allowlisted `git` or `gh` subprocess calls.
-6. Python opens or checks the PR, processes stacks bottom-up, applies the fix budget, and reports residual blockers.
-7. After a pushed fix, the agent replies with SHA and attribution.
-8. The automated cycle ends when the PR is merge-ready or blocked. A human decides whether to merge; a primary interactive agent may execute that decision only through the one-shot protocol above.
+6. Python opens or checks the PR, processes stacks bottom-up, maintains local watchlist state, and reports residual blockers.
+7. The installed companion `babysit-pr` skill handles interactive monitoring after a PR handoff.
+8. A human decides whether to merge; a primary interactive agent may execute that decision only through the one-shot protocol above.
 
 GitHub is the product issue source. Linear may mirror product planning for the operator's team; that team id is operator-local, not a product default. Beads tracks session claims, dependencies, and completion locally; it is not a replacement for GitHub product issues.
 
@@ -247,12 +226,16 @@ Version 1 responses use this envelope shape:
 
 See GitHub #40 and the planned `docs/json-contract.md` for the complete contract.
 
+### Python watchlist and CLI schema v2
+
+The Python watchlist persistence and `worktrees-hives` CLI JSON envelopes are separately versioned at schema v2. A legacy v1 watchlist is migrated when it is rewritten: the retired `fix_count`, `max_fixes`, and `babysit_cycle` fields are omitted, while unrelated additive job fields are preserved. This migration does not alter the Rust `wh` v1 contract above.
+
 ## Contribution workflow
 
 Follow the portable worker contracts. They apply to every agent platform.
 
 1. **[Safe Issue → Verified Commit](docs/workflows/safe-issue-verified-commit.md)** ([#84](https://github.com/rmems/worktrees-hives/issues/84), isolation [#6](https://github.com/rmems/worktrees-hives/issues/6)): read the issue and repo docs, isolate a worktree/branch, implement, run README gates, commit, push, comment on the issue with SHA. Never edit `main`.
-2. **[Safe Verified Commit → PR](docs/workflows/safe-verified-commit-to-pr.md)** ([#8](https://github.com/rmems/worktrees-hives/issues/8) / [RM-123](https://linear.app/rpd-34/issue/RM-123/issue-pr-workflow-never-auto-merge)): open or update a PR that links the issue, hand off URL + SHA, and never merge during that workflow. Review checklist: [`REVIEW.md`](REVIEW.md). Babysit is a later cycle ([#9](https://github.com/rmems/worktrees-hives/issues/9)); an authorized one-shot merge is a separate primary-agent action after those workflows end.
+2. **[Safe Verified Commit → PR](docs/workflows/safe-verified-commit-to-pr.md)** ([#8](https://github.com/rmems/worktrees-hives/issues/8) / [RM-123](https://linear.app/rpd-34/issue/RM-123/issue-pr-workflow-never-auto-merge)): open or update a PR that links the issue, hand off URL + SHA, and never merge during that workflow. Review checklist: [`REVIEW.md`](REVIEW.md). The installed companion `babysit-pr` skill handles any interactive monitoring after handoff; an authorized one-shot merge remains a separate primary-agent action.
 
 ## Review expectations
 

@@ -1,6 +1,6 @@
 # worktrees-hives
 
-`worktrees-hives` is a multi-platform foundation for turning issues into pull requests and babysitting those pull requests with isolated subagents. It combines an agent skill, a Python policy orchestrator, and a Rust safety core.
+`worktrees-hives` is a multi-platform foundation for turning issues into reviewable pull-request handoffs with isolated subagents. It combines repository guidance, a Python orchestration layer, and a Rust safety core. The installed companion `babysit-pr` skill owns interactive pull-request monitoring.
 
 > [!IMPORTANT]
 > The project never auto-merges. Its runtime and workers prepare pull requests for a human merge decision; a primary interactive agent may execute only an explicitly requested one-shot merge under the [`AGENTS.md` protocol](AGENTS.md#human-authorized-one-shot-merge-protocol).
@@ -27,8 +27,8 @@ git / gh / operating system
 
 | Layer | Owns | Does not own |
 | --- | --- | --- |
-| Agent skill | Prompts and guidance for when and how an agent calls the tooling | Enforceable safety policy |
-| Python `worktrees_hives` | Discovery, partitioning, issue-to-PR and babysit policy, stack ordering, fix budgets, and reports | Direct worktree or unsafe git mutation |
+| Agent skill | Portable prompts and repository guidance for when and how an agent calls the tooling; the installed companion `babysit-pr` skill owns interactive PR monitoring | Enforceable safety policy |
+| Python `worktrees_hives` | Discovery, partitioning, issue-to-PR orchestration, local watchlist state, stack ordering, and reports | Direct worktree or unsafe git mutation |
 | Rust `wh-core` + `wh` | Worktrees, durable job state, process supervision, path sandboxing, branch verification, and hard git/GitHub safety stops | High-level agent policy |
 | Interactive host connector | One-shot merge after a current human request and live preflight | Worker, unattended, queued, or inferred merges |
 | `git`, `gh`, OS | Version-control, GitHub, and process primitives invoked through Rust | Hive policy |
@@ -43,13 +43,13 @@ See [`AGENTS.md`](AGENTS.md) for detailed source ownership, data flow, and per-l
 
 These rules apply to every agent, platform, and command path:
 
-- **Never merge autonomously.** The runtime, orchestrators, babysit loops, scheduled jobs, and worker agents expose no merge path.
+- **Never merge autonomously.** The runtime, orchestrators, interactive monitoring flows, scheduled jobs, and worker agents expose no merge path.
 - A primary interactive agent may perform one immediate merge only after the human unambiguously identifies and affirmatively requests that exact PR and the agent completes the fresh, SHA-sensitive [authorization and review protocol](AGENTS.md#human-authorized-one-shot-merge-protocol).
 - Auto-merge, merge queues, scheduled merges, and admin bypasses are always forbidden.
 - Force pushes may use only `--force-with-lease`; bare `--force` and `-f` are forbidden.
 - Each job edits only its assigned branch and isolated worktree.
 - Mutating operations must verify the expected job branch and remain inside the configured path sandbox.
-- A babysit cycle may create at most **three code-fix commits per PR**. Review replies are not capped.
+- **Interactive PR monitoring is companion-skill guidance, not an enforcement boundary.** The installed `babysit-pr` skill handles that monitoring. Rust `wh-core` remains the hard code-enforced boundary for worktree, branch, path, process, push, runtime no-merge, auto-merge, and merge-queue controls.
 - Stacked pull requests are handled from the bottom of the stack upward.
 - Review replies are posted only after the fix is pushed and include the pushed SHA plus attribution, for example: `Grok Build agent: fixed in abc1234`.
 
@@ -100,6 +100,12 @@ python -m pip install -e './python[test]'
 ```
 
 Python will invoke `wh` from `WH_BIN` or `PATH` and consume the versioned JSON contract. It will not duplicate Rust-owned state or mutation logic.
+
+### Python watchlist and CLI migration
+
+The Python `worktrees-hives` CLI JSON envelope and persisted watchlist use schema version 2. When a legacy v1 watchlist is rewritten, it is migrated to v2: retired `fix_count`, `max_fixes`, and `babysit_cycle` fields are omitted while unrelated additive job fields are preserved.
+
+This Python migration does **not** change the Rust `wh` CLI contract. Rust `wh` continues to use its independently versioned v1 JSON envelope and state examples.
 
 ## Project documentation
 

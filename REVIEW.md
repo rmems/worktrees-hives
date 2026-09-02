@@ -6,11 +6,11 @@ This guide defines the review and pull-request lifecycle for `worktrees-hives`. 
 
 ```text
 issue -> claimed job -> isolated worktree -> focused commits -> pull request
-      -> CI/review babysit cycles -> merge-ready report -> human merge decision
+      -> companion-skill interactive monitoring -> merge-ready report -> human merge decision
       -> human merge or explicitly authorized one-shot primary-agent merge
 ```
 
-The orchestrator, unattended runtime, babysit loops, and worker agents may prepare a pull request and report that it is merge-ready, but they never merge it or claim that an automated merge will occur. A primary interactive agent may execute a human's explicit one-shot merge request only by completing the [protocol in `AGENTS.md`](AGENTS.md#human-authorized-one-shot-merge-protocol). Auto-merge and merge queues remain forbidden.
+The orchestrator, unattended runtime, installed companion `babysit-pr` skill, and worker agents may prepare or monitor a pull request and report that it is merge-ready, but they never merge it or claim that an automated merge will occur. The companion skill is guidance, not an enforcement boundary. A primary interactive agent may execute a human's explicit one-shot merge request only by completing the [protocol in `AGENTS.md`](AGENTS.md#human-authorized-one-shot-merge-protocol). Auto-merge and merge queues remain forbidden.
 
 For stacked pull requests, review and fix the bottom PR before its children. Re-evaluate children after their base changes.
 
@@ -32,14 +32,13 @@ For stacked pull requests, review and fix the bottom PR before its children. Re-
 - [ ] Mutating operations verify the expected job branch.
 - [ ] Paths are derived under the configured worktree base and reject traversal or escape.
 - [ ] Agents edit only the assigned branch and isolated worktree.
-- [ ] Python limits each PR to three code-fix commits per babysit cycle.
 - [ ] Owner allowlist is configuration-only (env/API); no hard-coded personal/org defaults in product code or docs.
 - [ ] Credentials, tokens, and sensitive subprocess data are absent from logs and reports.
 
 ### Behavior and compatibility
 
 - [ ] JSON output follows the documented envelope and keeps stdout machine-readable.
-- [ ] Compatible v1 changes are additive; breaking changes bump the schema version.
+- [ ] Rust `wh` v1 and Python CLI/watchlist v2 contracts are reviewed independently; each breaking change bumps its own schema version.
 - [ ] Errors are actionable and policy rejections map to exit code 2.
 - [ ] Cross-platform path and process behavior does not assume a Linux-only environment.
 - [ ] New behavior has focused tests, including negative policy tests where relevant.
@@ -84,7 +83,7 @@ Python owns orchestration policy. Reviewers should check:
 - Future #94/#95 execution wiring sanitizes inherited interpreter controls such as `PYTHONINSPECT`; the #93 classifier accepts structured argv only and cannot validate an environment override that is not represented there.
 - Discovery applies the owner allowlist before scheduling work.
 - Stacks are ordered bottom-up and children are deferred while their base is blocked.
-- The three-code-fix-commit budget is per PR per cycle; review replies do not consume it.
+- Python watchlist v1 inputs migrate on rewrite to v2 without `fix_count`, `max_fixes`, or `babysit_cycle`; unrelated additive job fields remain preserved.
 - Reports retain residual blockers and distinguish pending, blocked, failed, and merge-ready states.
 - P2–P4 placeholder modules remain explicit `NotImplementedError` stubs until their issues land.
 
@@ -114,7 +113,7 @@ Post a fix reply only after its commit is pushed. Include the short or full SHA 
 Grok Build agent: fixed the branch check in abc1234 and added the mismatch regression test.
 ```
 
-Replies may explain why no code change is needed and do not count against the code-fix budget. Resolve a thread only when the concern is addressed or the reviewer has accepted the explanation.
+Replies may explain why no code change is needed. Resolve a thread only when the concern is addressed or the reviewer has accepted the explanation.
 
 ## Human-authorized one-shot merge review
 
@@ -131,4 +130,4 @@ Before a primary interactive agent executes a requested merge, verify all of the
 
 ## Review outcome
 
-A successful automated cycle reports the PR as **merge-ready** when required CI is green, conflicts are absent, change requests are cleared, and review threads are resolved. That status is advisory and does not authorize a merge. A human reviewer decides whether and when to merge, then either merges personally or explicitly requests a one-shot primary-agent merge under the checklist above.
+A successful interactive-monitoring report marks the PR as **merge-ready** when required CI is green, conflicts are absent, change requests are cleared, and review threads are resolved. That status is advisory and does not authorize a merge. A human reviewer decides whether and when to merge, then either merges personally or explicitly requests a one-shot primary-agent merge under the checklist above.
