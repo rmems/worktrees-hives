@@ -112,22 +112,10 @@ class TestWatchlistAdd:
         assert job.repo == "repo"
         assert job.branch == "feature/x"
         assert job.status == JobStatus.PENDING
-        assert job.fix_count == 0
-        assert job.max_fixes == 3
 
     def test_add_with_options(self, watchlist: Watchlist) -> None:
-        job = watchlist.add("j1", "acme", "repo", "br", stack_id="s1", max_fixes=3)
+        job = watchlist.add("j1", "acme", "repo", "br", stack_id="s1")
         assert job.stack_id == "s1"
-        assert job.max_fixes == 3
-
-    def test_add_negative_max_fixes_raises(self, watchlist: Watchlist) -> None:
-        with pytest.raises(ValueError, match="max_fixes"):
-            watchlist.add("j1", "acme", "repo", "br", max_fixes=-1)
-
-    def test_add_exceeds_safety_ceiling_raises(self, watchlist: Watchlist) -> None:
-        with pytest.raises(PolicyError, match="safety ceiling") as exc_info:
-            watchlist.add("j1", "acme", "repo", "br", max_fixes=5)
-        assert exc_info.value.code == "MAX_FIXES_CEILING"
 
     def test_add_duplicate_raises(self, watchlist: Watchlist) -> None:
         watchlist.add("j1", "acme", "repo", "br")
@@ -153,32 +141,25 @@ class TestWatchlistAdd:
         assert len(quarantined) == 1
 
 
-class TestMaxFixesOnLoad:
-    def test_over_ceiling_max_fixes_clamped(self, state_path: Path) -> None:
+class TestWatchlistSchemaMigration:
+    def test_v1_mutation_rewrites_v2_without_babysit_state(self, state_path: Path) -> None:
+        """A v1 record keeps additive fields but drops retired babysit state on save."""
         state_path.write_text(
             json.dumps(
                 {
                     "schema_version": 1,
                     "jobs": {
-                        "high": {
-                            "job_id": "high",
+                        "legacy": {
+                            "job_id": "legacy",
                             "owner": "acme",
                             "repo": "r",
                             "branch": "br",
                             "status": "pending",
-                            "max_fixes": 99,
-                            "fix_count": 0,
+                            "fix_count": 2,
+                            "max_fixes": 3,
+                            "babysit_cycle": "before-removal",
                             "residual_blockers": [],
-                        },
-                        "good": {
-                            "job_id": "good",
-                            "owner": "acme",
-                            "repo": "r",
-                            "branch": "br",
-                            "status": "pending",
-                            "max_fixes": 2,
-                            "fix_count": 0,
-                            "residual_blockers": [],
+                            "future_job_key": {"source": "another-writer"},
                         },
                     },
                 }
@@ -186,12 +167,17 @@ class TestMaxFixesOnLoad:
             encoding="utf-8",
         )
         w = Watchlist(state_path, allowed_owners=frozenset({"acme"}))
-        high = w.get("high")
-        assert high is not None
-        assert high.max_fixes == 3  # clamped to ceiling, not dropped
-        good = w.get("good")
-        assert good is not None
-        assert good.max_fixes == 2
+        assert w.get("legacy") is not None
+
+        w.update_status("legacy", JobStatus.IN_PROGRESS)
+
+        reloaded = json.loads(state_path.read_text(encoding="utf-8"))
+        assert reloaded["schema_version"] == 2
+        entry = reloaded["jobs"]["legacy"]
+        assert entry["status"] == "in_progress"
+        assert entry["future_job_key"] == {"source": "another-writer"}
+        for field_name in ("fix_count", "max_fixes", "babysit_cycle"):
+            assert field_name not in entry
 
 
 class TestWatchlistRemove:
@@ -262,51 +248,6 @@ class TestWatchlistUpdate:
     def test_update_nonexistent_raises(self, watchlist: Watchlist) -> None:
         with pytest.raises(KeyError, match="not found"):
             watchlist.update_status("nope", JobStatus.COMPLETED)
-
-
-class TestWatchlistFixCount:
-    """Tests for Watchlist.increment_fix_count."""
-
-    def test_increment(self, watchlist: Watchlist) -> None:
-        watchlist.add("j1", "acme", "repo", "br")
-        job = watchlist.increment_fix_count("j1")
-        assert job.fix_count == 1
-        assert job.fix_budget_remaining == 2
-
-    def test_per_pr_budget_shared_across_jobs(self, watchlist: Watchlist) -> None:
-        """Two job_ids on the same PR share the 3-fix ceiling for a cycle."""
-        watchlist.add("a", "acme", "repo", "br")
-        watchlist.add("b", "acme", "repo", "br")
-        watchlist.set_pr("a", 9, "https://example.com/pr/9")
-        watchlist.set_pr("b", 9, "https://example.com/pr/9")
-        watchlist.begin_babysit_cycle("c1")
-        watchlist.increment_fix_count("a", cycle_id="c1")
-        watchlist.increment_fix_count("b", cycle_id="c1")
-        watchlist.increment_fix_count("a", cycle_id="c1")
-        with pytest.raises(PolicyError, match=r"exhausted|PR"):
-            watchlist.increment_fix_count("b", cycle_id="c1")
-
-    def test_exhaust_budget_raises(self, watchlist: Watchlist) -> None:
-        watchlist.add("j1", "acme", "repo", "br", max_fixes=1)
-        watchlist.increment_fix_count("j1")
-        with pytest.raises(PolicyError, match="exhausted"):
-            watchlist.increment_fix_count("j1")
-
-    def test_safety_ceiling_enforced_on_increment(
-        self, state_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Even if max_fixes were higher in memory, ceiling still caps increments."""
-        monkeypatch.delenv("WH_ALLOWED_OWNERS", raising=False)
-        w = Watchlist(state_path, allowed_owners=_TEST_OWNERS)
-        w.add("j1", "acme", "repo", "br", max_fixes=3)
-        job = w.get("j1")
-        assert job is not None
-        # Simulate a corrupted in-memory max that still must hit the ceiling.
-        job.max_fixes = 10
-        for _ in range(3):
-            w.increment_fix_count("j1")
-        with pytest.raises(PolicyError, match=r"exhausted|ceiling"):
-            w.increment_fix_count("j1")
 
 
 class TestOwnerAllowlist:
@@ -541,18 +482,18 @@ class TestWatchlistCheck:
         assert len(result["done"]) == 1
         assert result["done"][0].job_id == "j4"
 
-    def test_exhausted_budget_with_blockers_is_blocked(self, watchlist: Watchlist) -> None:
-        watchlist.add("j1", "acme", "r1", "br", max_fixes=1)
+    def test_explicitly_blocked_job_with_blockers_is_blocked(self, watchlist: Watchlist) -> None:
+        watchlist.add("j1", "acme", "r1", "br")
         watchlist.set_pr("j1", 1, "https://example.com/pr/1")
-        watchlist.increment_fix_count("j1")
         watchlist.set_blockers("j1", ["still failing"])
+        watchlist.update_status("j1", JobStatus.BLOCKED)
         result = watchlist.check()
         assert len(result["blocked"]) == 1
         assert result["blocked"][0].job_id == "j1"
         assert result["ready"] == []
         assert result["needs_fix"] == []
 
-    def test_green_pr_with_budget_is_ready(self, watchlist: Watchlist) -> None:
+    def test_green_pr_is_ready(self, watchlist: Watchlist) -> None:
         watchlist.add("j1", "acme", "r1", "br")
         watchlist.set_pr("j1", 9, "https://example.com/pr/9")
         result = watchlist.check()
@@ -572,12 +513,6 @@ class TestJobState:
         assert job.is_actionable is True
         job.status = JobStatus.COMPLETED
         assert job.is_actionable is False
-
-    def test_fix_budget(self) -> None:
-        job = JobState("j1", "acme", "repo", "br", fix_count=2, max_fixes=3)
-        assert job.fix_budget_remaining == 1
-        job.fix_count = 3
-        assert job.fix_budget_remaining == 0
 
 
 class TestMultiOwner:
@@ -604,7 +539,7 @@ class TestMultiOwner:
 class TestCliPolicyExit:
     """CLI maps PolicyError to exit code 2."""
 
-    def test_add_max_fixes_policy_returns_2(
+    def test_add_disallowed_owner_policy_returns_2(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         from worktrees_hives.cli import main
@@ -617,11 +552,9 @@ class TestCliPolicyExit:
                 "watchlist",
                 "add",
                 "j1",
-                "acme",
+                "other-owner",
                 "repo",
                 "br",
-                "--max-fixes",
-                "4",
             ]
         )
         assert code == 2
@@ -698,15 +631,6 @@ class TestCheckEdgeCases:
         assert job.last_check is not None
         assert any(result.values())
 
-    def test_babysit_cycle_resets_fix_count(self, watchlist: Watchlist) -> None:
-        watchlist.add("j1", "acme", "r1", "br", max_fixes=3)
-        watchlist.increment_fix_count("j1", cycle_id="c1")
-        watchlist.increment_fix_count("j1", cycle_id="c1")
-        assert watchlist.get("j1").fix_count == 2
-        watchlist.begin_babysit_cycle("c2", "j1")
-        assert watchlist.get("j1").fix_count == 0
-        assert watchlist.get("j1").babysit_cycle == "c2"
-
     def test_schema_version_too_new_raises(self, state_path: Path) -> None:
         state_path.write_text(
             json.dumps({"schema_version": 99, "jobs": {}}),
@@ -742,7 +666,7 @@ class TestCheckEdgeCases:
 
 
 class TestCliJsonEnvelopes:
-    """--json emits v1 envelopes for mutations and check categories."""
+    """--json emits v2 envelopes for mutations and check categories."""
 
     def test_json_add_and_remove(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
@@ -770,7 +694,7 @@ class TestCliJsonEnvelopes:
         out = capsys.readouterr().out
         payload = json.loads(out)
         assert payload["ok"] is True
-        assert payload["schema_version"] == 1
+        assert payload["schema_version"] == 2
         assert payload["command"] == "watchlist.add"
         assert payload["data"]["job"]["job_id"] == "j1"
         assert "Added job" not in out
@@ -783,7 +707,7 @@ class TestCliJsonEnvelopes:
         assert rem["data"]["removed"] is True
         assert "Removed job" not in out2
 
-    def test_json_check_includes_blockers_and_budget(
+    def test_json_check_includes_blockers_without_babysit_budget(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
         from worktrees_hives.cli import main
@@ -802,9 +726,8 @@ class TestCliJsonEnvelopes:
         assert len(needs) == 1
         item = needs[0]
         assert item["residual_blockers"] == ["ruff", "review"]
-        assert item["fix_count"] == 0
-        assert item["max_fixes"] == 3
-        assert item["fix_budget_remaining"] == 3
+        for field_name in ("fix_count", "max_fixes", "fix_budget_remaining", "babysit_cycle"):
+            assert field_name not in item
 
     def test_json_add_includes_stack_id(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]

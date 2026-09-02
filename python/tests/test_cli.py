@@ -3,7 +3,7 @@
 Covers the orchestration commands wired on top of the policy modules. Network
 and subprocess work is stubbed at the module boundary (``discover_all`` and
 ``fetch_pr_infos``) so these tests exercise argument parsing, output rendering,
-the v1 JSON envelope, and the exit-code contract.
+the v2 JSON envelope, and the exit-code contract.
 """
 
 from __future__ import annotations
@@ -88,7 +88,7 @@ class TestDiscover:
         assert main(["--json", "discover"]) == 0
         env = _envelope(capsys)
         assert env["ok"] is True
-        assert env["schema_version"] == 1
+        assert env["schema_version"] == 2
         assert env["command"] == "discover"
         assert env["data"]["total_issues"] == 1
         assert env["data"]["issues"][0]["number"] == 4

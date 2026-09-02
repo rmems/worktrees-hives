@@ -368,7 +368,7 @@ class TestCliLabRun:
         assert code == 0
         env = json.loads(capsys.readouterr().out)
         assert env["ok"] is True
-        assert env["schema_version"] == 1
+        assert env["schema_version"] == 2
         assert env["command"] == "lab.run"
         assert env["data"]["job_id"] == job.job_id
 
