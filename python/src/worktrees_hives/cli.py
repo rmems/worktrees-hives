@@ -1,4 +1,4 @@
-"""CLI for worktrees-hives Python orchestrator (entry: worktrees-hives / wh-orch).
+"""CLI for worktrees-hives discovery, planning, watchlist, and lab commands.
 
 Does NOT register as `wh` — that name is reserved for the Rust binary.
 """
@@ -12,7 +12,6 @@ import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from worktrees_hives.babysit import DEFAULT_ATTRIBUTION, MAX_FIX_COMMITS_PER_CYCLE
 from worktrees_hives.bridge import WhClient
 from worktrees_hives.discover import OwnerPolicyError
 from worktrees_hives.errors import FindingsValidationError, PolicyError
@@ -29,7 +28,6 @@ from worktrees_hives.watchlist import (
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from worktrees_hives.babysit import BabysitResult
     from worktrees_hives.discover import DiscoveryResult
     from worktrees_hives.stacks import PRInfo, Stack
 
@@ -242,7 +240,7 @@ def cmd_check(args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Orchestration commands (discover / plan / babysit)
+# Orchestration commands (discover / plan)
 # ---------------------------------------------------------------------------
 
 
@@ -502,92 +500,6 @@ def cmd_plan(args: argparse.Namespace) -> int:
     return _guard("plan", as_json, run)
 
 
-def _babysit_result_to_json(result: BabysitResult) -> dict[str, Any]:
-    return {
-        "pr_number": result.pr_number,
-        "state": result.state.value,
-        "fix_commits_used": result.fix_commits_used,
-        "threads_resolved": result.threads_resolved,
-        "threads_remaining": result.threads_remaining,
-        "checks_passed": result.checks_passed,
-        "checks_failed": result.checks_failed,
-        "checks_pending": result.checks_pending,
-        "residual_blockers": list(result.residual_blockers),
-    }
-
-
-def cmd_babysit(args: argparse.Namespace) -> int:
-    """Run a babysit cycle over PRs in one repo. Never merges."""
-    as_json = getattr(args, "json", False)
-
-    def run() -> int:
-        from worktrees_hives.babysit import assert_owner_allowed, babysit_multiple
-
-        if not 0 <= args.max_fixes <= MAX_FIX_COMMITS_PER_CYCLE:
-            raise PolicyError(
-                "MAX_FIXES_CEILING",
-                f"--max-fixes {args.max_fixes} is outside the allowed range "
-                f"0-{MAX_FIX_COMMITS_PER_CYCLE} (AGENTS.md safety cap).",
-            )
-
-        pr_numbers = list(args.pr_numbers)
-        # argparse type=int accepts 0/negatives; each entry is a separate cycle
-        # with a fresh fix budget, so duplicates would also re-spend the cap.
-        if any(n <= 0 for n in pr_numbers):
-            raise ValueError(f"PR numbers must be positive integers, got {pr_numbers}")
-        if len(pr_numbers) != len(set(pr_numbers)):
-            raise ValueError(
-                f"duplicate PR numbers are not allowed (each PR is one cycle "
-                f"with its own fix budget): {pr_numbers}"
-            )
-
-        # babysit_multiple swallows per-PR exceptions into PRState.UNKNOWN and
-        # always returns a result list, so an empty/disallowed allowlist would
-        # otherwise look like a successful exit-0 cycle that did no work.
-        # Fail closed here with exit 2 before any GitHub mutations.
-        try:
-            assert_owner_allowed(args.owner)
-        except ValueError as e:
-            raise PolicyError("OWNER_NOT_ALLOWED", str(e)) from e
-
-        results = babysit_multiple(
-            owner=args.owner,
-            repo=args.repo,
-            pr_numbers=pr_numbers,
-            attribution=args.attribution,
-            max_fixes=args.max_fixes,
-        )
-        if as_json:
-            print(
-                json.dumps(
-                    _v1_envelope(
-                        "babysit",
-                        {"results": [_babysit_result_to_json(r) for r in results]},
-                    )
-                )
-            )
-            return 0
-
-        for result in results:
-            print(f"\nPR #{result.pr_number}: {result.state.value}")
-            print(f"  Fixes applied: {result.fix_commits_used}/{args.max_fixes}")
-            print(
-                f"  Threads resolved: {result.threads_resolved}, "
-                f"remaining: {result.threads_remaining}"
-            )
-            print(
-                f"  Checks: {result.checks_passed} passed, {result.checks_failed} failed, "
-                f"{result.checks_pending} pending"
-            )
-            for blocker in result.residual_blockers:
-                print(f"  Blocker: {blocker}")
-        # Merge-ready is not merged; this tool never merges.
-        print("\nNo PR was merged — merging remains a human decision.")
-        return 0
-
-    return _guard("babysit", as_json, run)
-
-
 def cmd_lab_run(args: argparse.Namespace) -> int:
     """Handle ``lab run`` — single hypothesis unit (GH #80). Never merges."""
     as_json = getattr(args, "json", False)
@@ -779,37 +691,7 @@ def main(argv: list[str] | None = None) -> int:
         help="Skip owner allowlist filtering",
     )
 
-    # babysit
-    baby_p = sub.add_parser(
-        "babysit",
-        help="Run a babysit cycle over PRs in one repo (never merges)",
-    )
-    baby_p.add_argument("--owner", required=True, help="Repository owner")
-    baby_p.add_argument("--repo", required=True, help="Repository name")
-    baby_p.add_argument(
-        "pr_numbers",
-        nargs="+",
-        type=int,
-        metavar="PR",
-        help=(
-            "PR numbers in bottom-up stack order. Ordering is not computed here: "
-            "take it from `worktrees-hives plan`. Out-of-order input defers "
-            "children behind a blocked parent incorrectly."
-        ),
-    )
-    baby_p.add_argument(
-        "--max-fixes",
-        type=int,
-        default=MAX_FIX_COMMITS_PER_CYCLE,
-        help=f"Max code-fix commits per PR per cycle (default: {MAX_FIX_COMMITS_PER_CYCLE})",
-    )
-    baby_p.add_argument(
-        "--attribution",
-        default=DEFAULT_ATTRIBUTION,
-        help=f"Attribution prefixed to review replies (default: {DEFAULT_ATTRIBUTION!r})",
-    )
-
-    # lab (hypothesis lab — not babysit)
+    # lab
     lab_p = sub.add_parser(
         "lab",
         help="Hypothesis lab (allocate worktrees, enforce findings; never merges)",
@@ -891,7 +773,6 @@ def main(argv: list[str] | None = None) -> int:
     handlers = {
         "discover": cmd_discover,
         "plan": cmd_plan,
-        "babysit": cmd_babysit,
     }
     handler = handlers.get(args.command)
     if handler is None:
