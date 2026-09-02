@@ -799,11 +799,21 @@ class BabysitCycle:
                     head = str(fresh.get("headRefOid") or "")
                     if head:
                         for s in pushed_shas:
-                            if head.startswith(s) or s.startswith(head[: max(7, min(len(s), 12))]):
+                            if head.startswith(s) or s.startswith(head):
                                 primary = head[:8]
+                                equivalent_shas = {
+                                    recorded
+                                    for recorded in self._fix_shas
+                                    if head.startswith(recorded) or recorded.startswith(head)
+                                }
+                                self._fix_shas.difference_update(equivalent_shas)
                                 self._fix_shas.add(head)
                                 break
-                except (ValueError, subprocess.TimeoutExpired):
+                except (
+                    subprocess.CalledProcessError,
+                    subprocess.TimeoutExpired,
+                    ValueError,
+                ):
                     pass
                 reply_body = f"Addressed in {primary}: {self.attribution}"
                 try:
@@ -872,7 +882,11 @@ class BabysitCycle:
                         msg = f"{label}: {check.name}"
                         if msg not in result.residual_blockers:
                             result.residual_blockers.append(msg)
-            except (ValueError, subprocess.TimeoutExpired) as e:
+            except (
+                subprocess.CalledProcessError,
+                subprocess.TimeoutExpired,
+                ValueError,
+            ) as e:
                 result.residual_blockers.append(f"CI re-check after fix failed: {e}")
                 result.checks_failed = max(result.checks_failed, 1)
 

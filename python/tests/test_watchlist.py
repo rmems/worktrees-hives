@@ -128,6 +128,12 @@ class TestWatchlistAdd:
         job = watchlist.add("j1", "acme", "repo", "br", max_fixes=999)
         assert job.max_fixes == 999
 
+    def test_add_rejects_conflicting_sibling_budget(self, watchlist: Watchlist) -> None:
+        watchlist.add("j1", "acme", "repo", "br", max_fixes=2)
+        with pytest.raises(PolicyError, match="one max_fixes budget") as exc_info:
+            watchlist.add("j2", "acme", "repo", "br", max_fixes=3)
+        assert exc_info.value.code == "FIX_BUDGET_CONFLICT"
+
     def test_add_duplicate_raises(self, watchlist: Watchlist) -> None:
         watchlist.add("j1", "acme", "repo", "br")
         with pytest.raises(ValueError, match="already exists"):
@@ -284,6 +290,13 @@ class TestWatchlistFixCount:
         watchlist.increment_fix_count("a", cycle_id="c1")
         with pytest.raises(PolicyError, match=r"exhausted|PR"):
             watchlist.increment_fix_count("b", cycle_id="c1")
+
+    def test_set_pr_rejects_conflicting_sibling_budget(self, watchlist: Watchlist) -> None:
+        watchlist.add("a", "acme", "repo", "branch-a", max_fixes=2)
+        watchlist.add("b", "acme", "repo", "branch-b", max_fixes=3)
+        watchlist.set_pr("a", 9, "https://example.com/pr/9")
+        with pytest.raises(PolicyError, match="one max_fixes budget"):
+            watchlist.set_pr("b", 9, "https://example.com/pr/9")
 
     def test_exhaust_budget_raises(self, watchlist: Watchlist) -> None:
         watchlist.add("j1", "acme", "repo", "br", max_fixes=1)
@@ -542,6 +555,20 @@ class TestWatchlistCheck:
         assert result["blocked"][0].job_id == "j1"
         assert result["ready"] == []
         assert result["needs_fix"] == []
+
+    def test_sibling_aggregate_exhausts_needs_fix_budget(self, watchlist: Watchlist) -> None:
+        watchlist.add("a", "acme", "r1", "br", max_fixes=1)
+        watchlist.add("b", "acme", "r1", "br", max_fixes=1)
+        watchlist.set_pr("a", 1, "https://example.com/pr/1")
+        watchlist.set_pr("b", 1, "https://example.com/pr/1")
+        watchlist.begin_babysit_cycle("c1")
+        watchlist.increment_fix_count("a", cycle_id="c1")
+        watchlist.set_blockers("b", ["still failing"])
+
+        result = watchlist.check(record=False)
+
+        assert result["needs_fix"] == []
+        assert [job.job_id for job in result["blocked"]] == ["b"]
 
     def test_green_pr_with_budget_is_ready(self, watchlist: Watchlist) -> None:
         watchlist.add("j1", "acme", "r1", "br")

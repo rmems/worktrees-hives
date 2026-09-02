@@ -1067,12 +1067,69 @@ class TestBabysitCycleTimeoutAndRecheck:
             owner="acme",
             repo="repo",
             pr_number=1,
-            fix_handler=lambda _t: "deadbeef",
+            fix_handler=lambda _t: ["deadbee", "deadbeef"],
         )
         result = cycle.run()
         assert result.threads_resolved == 1
-        assert result.fix_commits_used >= 1
+        assert result.fix_commits_used == 1
+        assert cycle._fix_shas == {"deadbeef0123456789"}
         assert mock_checks.call_count == 2
         assert mock_status.call_count == 3
         assert result.state == PRState.PENDING_CI
         assert result.checks_pending == 1
+
+    @pytest.mark.parametrize("failed_refresh", [1, 2])
+    @patch("worktrees_hives.babysit.post_pr_comment")
+    @patch("worktrees_hives.babysit.resolve_thread")
+    @patch("worktrees_hives.babysit.reply_to_thread")
+    @patch("worktrees_hives.babysit.fetch_review_threads")
+    @patch("worktrees_hives.babysit.fetch_pr_checks", return_value=[])
+    @patch("worktrees_hives.babysit.fetch_pr_status")
+    def test_called_process_error_during_post_fix_refresh_is_handled(
+        self,
+        mock_status: MagicMock,
+        mock_checks: MagicMock,
+        mock_threads: MagicMock,
+        mock_reply: MagicMock,
+        mock_resolve: MagicMock,
+        mock_post: MagicMock,
+        failed_refresh: int,
+    ) -> None:
+        status = _make_pr_data(head_ref_oid="deadbeef0123456789")
+        failure = subprocess.CalledProcessError(1, ["gh", "pr", "view"])
+        refreshes: list[object] = [status, status, status]
+        refreshes[failed_refresh] = failure
+        mock_status.side_effect = refreshes
+        mock_threads.return_value = [
+            ReviewThread(
+                thread_id="T1",
+                comments=[
+                    {
+                        "author": {"login": "bot"},
+                        "path": "main.rs",
+                        "line": 10,
+                        "body": "Please fix this bug",
+                        "databaseId": 100,
+                        "url": "https://example.com",
+                    }
+                ],
+            )
+        ]
+        cycle = BabysitCycle(
+            owner="acme",
+            repo="repo",
+            pr_number=1,
+            fix_handler=lambda _t: "deadbeef",
+        )
+
+        result = cycle.run()
+
+        assert result.threads_resolved == 1
+        assert result.fix_commits_used == 1
+        mock_reply.assert_called_once()
+        mock_resolve.assert_called_once()
+        mock_post.assert_called_once()
+        if failed_refresh == 2:
+            assert any(
+                "CI re-check after fix failed" in blocker for blocker in result.residual_blockers
+            )

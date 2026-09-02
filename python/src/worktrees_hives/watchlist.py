@@ -392,7 +392,8 @@ class Watchlist:
         """Add a new job to the watchlist.
 
         Raises ValueError if job_id already exists or max_fixes is negative.
-        Raises PolicyError if owner is outside the configured allowlist.
+        Raises PolicyError if owner is outside the configured allowlist or a
+        sibling job configures a different fix budget.
         """
         if max_fixes is not None:
             max_fixes = _validate_max_fixes(max_fixes)
@@ -410,6 +411,12 @@ class Watchlist:
         with self._locked():
             if job_id in self._jobs or job_id in self._deferred_raw:
                 raise ValueError(f"Job {job_id!r} already exists in watchlist")
+            sibling_budgets = {
+                job.max_fixes
+                for job in self._jobs.values()
+                if job.owner == owner and job.repo == repo and job.branch == branch
+            }
+            self._validate_canonical_budget(sibling_budgets | {max_fixes})
             job = JobState(
                 job_id=job_id,
                 owner=owner,
@@ -515,24 +522,12 @@ class Watchlist:
             if cycle_id is not None and job.babysit_cycle != cycle_id:
                 job.babysit_cycle = cycle_id
                 job.fix_count = 0
-            # If a PR is set and this job has a finite budget, share the budget
-            # across sibling jobs in the same owner/repo/PR/cycle.
-            if job.pr_number is not None and job.max_fixes is not None:
-                used = sum(
-                    j.fix_count
-                    for j in self._jobs.values()
-                    if j.owner == job.owner
-                    and j.repo == job.repo
-                    and j.pr_number == job.pr_number
-                    and j.babysit_cycle == job.babysit_cycle
-                )
-            else:
-                used = job.fix_count
-            if job.max_fixes is not None and used >= job.max_fixes:
+            max_fixes, used = self._pr_cycle_budget(job)
+            if max_fixes is not None and used >= max_fixes:
                 raise PolicyError(
                     "FIX_BUDGET_EXHAUSTED",
                     f"Job {job_id!r} has exhausted its fix budget "
-                    f"({job.max_fixes}"
+                    f"({max_fixes}"
                     + (
                         f"; PR #{job.pr_number} cycle total {used}"
                         if job.pr_number is not None
@@ -570,6 +565,15 @@ class Watchlist:
             job = self._jobs.get(job_id)
             if job is None:
                 raise KeyError(f"Job {job_id!r} not found in watchlist")
+            sibling_budgets = {
+                sibling.max_fixes
+                for sibling in self._jobs.values()
+                if sibling.owner == job.owner
+                and sibling.repo == job.repo
+                and sibling.pr_number == pr_number
+                and sibling.babysit_cycle == job.babysit_cycle
+            }
+            self._validate_canonical_budget(sibling_budgets | {job.max_fixes})
             job.pr_number = pr_number
             job.pr_url = pr_url
             self._save()
@@ -646,8 +650,11 @@ class Watchlist:
                 # Active worker — never re-queue PR creation or concurrent fixes.
                 result["in_progress"].append(job)
             elif job.residual_blockers:
-                budget_remaining = job.fix_budget_remaining
-                if (budget_remaining is None or budget_remaining > 0) and job.status != JobStatus.BLOCKED:
+                max_fixes, fixes_used = self._pr_cycle_budget(job)
+                budget_remaining = None if max_fixes is None else max(0, max_fixes - fixes_used)
+                if (
+                    budget_remaining is None or budget_remaining > 0
+                ) and job.status != JobStatus.BLOCKED:
                     result["needs_fix"].append(job)
                 else:
                     result["blocked"].append(job)
@@ -661,3 +668,29 @@ class Watchlist:
         if record and jobs:
             self._save()
         return result
+
+    @staticmethod
+    def _validate_canonical_budget(budgets: set[int | None]) -> None:
+        """Reject sibling jobs that configure different fix budgets."""
+        if len(budgets) > 1:
+            values = sorted("unbounded" if value is None else str(value) for value in budgets)
+            raise PolicyError(
+                "FIX_BUDGET_CONFLICT",
+                f"Sibling jobs must use one max_fixes budget; found {', '.join(values)}",
+            )
+
+    def _pr_cycle_budget(self, job: JobState) -> tuple[int | None, int]:
+        """Return the canonical budget and aggregate usage for a PR cycle."""
+        if job.pr_number is None:
+            return job.max_fixes, job.fix_count
+        siblings = [
+            sibling
+            for sibling in self._jobs.values()
+            if sibling.owner == job.owner
+            and sibling.repo == job.repo
+            and sibling.pr_number == job.pr_number
+            and sibling.babysit_cycle == job.babysit_cycle
+        ]
+        budgets = {sibling.max_fixes for sibling in siblings}
+        self._validate_canonical_budget(budgets)
+        return next(iter(budgets)), sum(sibling.fix_count for sibling in siblings)
