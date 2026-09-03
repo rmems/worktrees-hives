@@ -2,6 +2,8 @@
 
 This document describes the versioned JSON envelope used for communication between the Python orchestrator and the Rust `wh` CLI.
 
+The Rust `wh` envelope remains independently versioned at schema version 1. The Python `worktrees-hives` CLI envelopes and persisted watchlist are versioned separately at schema v2; see [Python watchlist and CLI schema v2](#python-watchlist-and-cli-schema-v2).
+
 ## Envelope Structure
 
 All `--json` responses follow this schema:
@@ -186,8 +188,7 @@ wh --json state show acme example-repo 42
         "branch": "issue-42-fix",
         "worktree_path": "/home/user/.local/share/worktrees-hives/worktrees/acme/example-repo/wh-42",
         "stack_id": "stack-1",
-        "status": "babysitting",
-        "fix_count": 1,
+        "status": "claimed",
         "residual_blockers": [],
         "created_at": 1700000000,
         "updated_at": 1700000100
@@ -221,7 +222,6 @@ wh --json state add acme example-repo 42 --kind issue --branch issue-42-fix --wo
     "worktree_path": "/path/to/wt",
     "stack_id": "stack-1",
     "status": "claimed",
-    "fix_count": 0,
     "residual_blockers": [],
     "created_at": 1700000000,
     "updated_at": 1700000000
@@ -450,6 +450,69 @@ fixture models the four built-in v0 roles.
 - Consumers MUST ignore unknown fields in `data`.
 - Consumers MUST handle `error` being `null` or an object.
 
+This policy applies to the Rust `wh` envelope. It does not version the Python watchlist file or the Python `worktrees-hives` CLI envelopes; those use the separate v2 rules below.
+
+## Python watchlist and CLI schema v2
+
+The Python persisted watchlist (`watchlist.json` / `WH_WATCHLIST_PATH`) and the Python `worktrees-hives --json` envelopes are schema v2. This bump is independent of the Rust `wh` v1 envelope above. Rust `wh status` / `wh jobs` remain documented in [`status-schema.md`](status-schema.md).
+
+### Persisted watchlist
+
+- A missing `schema_version` is treated as `1`.
+- Reads accept integer `schema_version` `1` or `2` only (not booleans, numeric strings, or floats).
+- Legacy v1 files load successfully. The next real mutation rewrites the file as v2.
+- On rewrite, retired babysit-only fields `fix_count`, `max_fixes`, and `babysit_cycle` are omitted.
+- Unrelated unknown job fields and unknown top-level keys are preserved.
+
+Legacy v1 input (accepted on read):
+
+```json
+{
+  "schema_version": 1,
+  "jobs": {
+    "wh-42": {
+      "job_id": "wh-42",
+      "owner": "acme",
+      "repo": "example-repo",
+      "branch": "issue-42-fix",
+      "status": "pending",
+      "fix_count": 2,
+      "max_fixes": 3,
+      "babysit_cycle": "before-removal",
+      "kind": "issue"
+    }
+  }
+}
+```
+
+After the next mutation, the same record is persisted as v2. The retired fields are gone; `kind` remains:
+
+```json
+{
+  "schema_version": 2,
+  "jobs": {
+    "wh-42": {
+      "job_id": "wh-42",
+      "owner": "acme",
+      "repo": "example-repo",
+      "branch": "issue-42-fix",
+      "status": "pending",
+      "stack_id": null,
+      "residual_blockers": [],
+      "pr_number": null,
+      "pr_url": null,
+      "last_check": null,
+      "error": null,
+      "kind": "issue"
+    }
+  }
+}
+```
+
+### Python CLI envelopes
+
+`worktrees-hives --json` uses `schema_version: 2`. Watchlist commands emit `watchlist.list`, `watchlist.add`, `watchlist.remove`, and `watchlist.check`. Those envelopes omit `fix_count`, `max_fixes`, and `babysit_cycle`. See [`state-show.json`](examples/state-show.json) and [`state-add.json`](examples/state-add.json).
+
 ## Fixtures
 
 Example JSON files for testing are located in `docs/examples/`:
@@ -457,8 +520,8 @@ Example JSON files for testing are located in `docs/examples/`:
 - `bootstrap.json`
 - `worktree-create.json`
 - `worktree-list.json`
-- `state-show.json`
-- `state-add.json`
+- `state-show.json` — Python `watchlist.list` schema v2 envelope (no retired babysit fields)
+- `state-add.json` — Python `watchlist.add` schema v2 envelope (no retired babysit fields)
 - `git-run.json`
 - `error-policy.json`
 - `research-contract-cloud-agent.json`

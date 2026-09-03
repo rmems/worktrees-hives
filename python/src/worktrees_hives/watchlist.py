@@ -278,13 +278,9 @@ class Watchlist:
         """
         data = _read_json(self._path)
         schema = data.get("schema_version", 1)
-        try:
-            schema_i = int(schema)
-        except (TypeError, ValueError) as e:
-            raise CorruptStateError(f"Invalid schema_version in {self._path}: {schema!r}") from e
-        if schema_i not in {1, 2}:
+        if not isinstance(schema, int) or isinstance(schema, bool) or schema not in {1, 2}:
             raise CorruptStateError(
-                f"Unsupported watchlist schema_version {schema_i} in {self._path} "
+                f"Unsupported watchlist schema_version {schema!r} in {self._path} "
                 f"(this build supports 1 and 2)"
             )
         # Preserve unknown top-level keys for additive round-trip.
@@ -324,7 +320,7 @@ class Watchlist:
                 self._jobs[jid] = JobState(**d)
                 if extras:
                     self._job_extras[jid] = extras
-            except KeyError, ValueError, TypeError, PolicyError:
+            except (KeyError, ValueError, TypeError, PolicyError):
                 # Preserve unparseable records so they are not wiped on next save.
                 self._deferred_raw[jid] = raw
 

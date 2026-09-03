@@ -179,6 +179,16 @@ class TestWatchlistSchemaMigration:
         for field_name in ("fix_count", "max_fixes", "babysit_cycle"):
             assert field_name not in entry
 
+    @pytest.mark.parametrize("schema", [True, False, "1", "2", 2.0, 2.9])
+    def test_schema_version_must_be_int_1_or_2(self, state_path: Path, schema: object) -> None:
+        """Reject bools, numeric strings, and floats; integers 1 and 2 stay valid."""
+        state_path.write_text(
+            json.dumps({"schema_version": schema, "jobs": {}}),
+            encoding="utf-8",
+        )
+        with pytest.raises(CorruptStateError, match="Unsupported"):
+            Watchlist(state_path, allowed_owners=_TEST_OWNERS)
+
 
 class TestWatchlistRemove:
     """Tests for Watchlist.remove."""
