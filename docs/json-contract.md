@@ -188,7 +188,7 @@ wh --json state show acme example-repo 42
         "branch": "issue-42-fix",
         "worktree_path": "/home/user/.local/share/worktrees-hives/worktrees/acme/example-repo/wh-42",
         "stack_id": "stack-1",
-        "status": "claimed",
+        "status": "pending",
         "residual_blockers": [],
         "created_at": 1700000000,
         "updated_at": 1700000100
