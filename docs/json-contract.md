@@ -460,7 +460,7 @@ The Python persisted watchlist (`watchlist.json` / `WH_WATCHLIST_PATH`) and the 
 
 - A missing `schema_version` is treated as `1`.
 - Reads accept integer `schema_version` `1` or `2` only (not booleans, numeric strings, or floats).
-- Legacy v1 files load successfully. The next real mutation rewrites the file as v2.
+- Legacy v1 files load successfully. The next mutation that writes the file rewrites it as v2 (read-only paths and `check` with zero matching jobs do not rewrite).
 - On rewrite, retired babysit-only fields `fix_count`, `max_fixes`, and `babysit_cycle` are omitted.
 - Unrelated unknown job fields and unknown top-level keys are preserved.
 
