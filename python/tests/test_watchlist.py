@@ -797,3 +797,43 @@ class TestCliJsonEnvelopes:
         assert payload["command"] == "watchlist.check"
         assert "categories" in payload["data"]
         assert "jobs" not in payload["data"]
+
+    def test_json_list_envelope_and_corrupt_shape(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        from worktrees_hives.cli import main
+
+        monkeypatch.setenv("WH_ALLOWED_OWNERS", "acme")
+        state = str(tmp_path / "watchlist.json")
+        assert (
+            main(
+                [
+                    "--json",
+                    "--state",
+                    state,
+                    "watchlist",
+                    "add",
+                    "j1",
+                    "acme",
+                    "repo",
+                    "br",
+                ]
+            )
+            == 0
+        )
+        capsys.readouterr()
+        assert main(["--json", "--state", state, "watchlist", "list"]) == 0
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["ok"] is True
+        assert payload["schema_version"] == 2
+        assert payload["command"] == "watchlist.list"
+        assert [j["job_id"] for j in payload["data"]["jobs"]] == ["j1"]
+
+        broken = tmp_path / "broken.json"
+        broken.write_text("{not-json", encoding="utf-8")
+        assert main(["--json", "--state", str(broken), "watchlist", "list"]) == 1
+        corrupt = json.loads(capsys.readouterr().out)
+        assert corrupt["ok"] is False
+        assert corrupt["command"] == "watchlist.list"
+        assert corrupt["data"] == {"jobs": []}
+        assert corrupt["error"]["code"] == "CORRUPT_STATE"
