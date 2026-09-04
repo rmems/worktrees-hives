@@ -95,6 +95,8 @@ python -m pip install -e '.[test]'
 pytest
 ```
 
+The required Qlty Cloud check is reproduced with `qlty check` from the repository root. Configuration lives in [`.qlty/qlty.toml`](.qlty/qlty.toml): `python/tests/**` is test code, Bandit B101/B108 are ignored only on test paths, and production Python Bandit analysis stays enabled.
+
 ### Agent-skill review notes
 
 Skill text is a portable operator interface, not enforcement. Verify that it:

@@ -1,0 +1,82 @@
+# Minimum reproducible Qlty baseline (GitHub #133).
+#
+# Local command that reproduces the Qlty Cloud PR check:
+#   qlty check
+#
+# This file is used by both Qlty CLI and Qlty Cloud
+# (https://docs.qlty.sh/cli/qlty-toml). Without it, Cloud runs a temporary
+# `qlty init` and applies production Bandit policy to pytest code.
+#
+# Plugins: Bandit is the plugin the required `qlty check` actually uses for
+# blocking findings on this repository. Native CI remains the owner of
+# ruff / mypy / clippy / rustfmt / cargo test. Do not add analyzer families
+# here without a dedicated issue.
+#
+# Production Python analysis stays enabled. B101 / B108 are ignored only under
+# test paths so a deliberate production assert or insecure temp path still
+# blocks.
+config_version = "0"
+
+exclude_patterns = [
+  "*_min.*",
+  "*-min.*",
+  "*.min.*",
+  "**/.yarn/**",
+  "**/*.d.ts",
+  "**/assets/**",
+  "**/bower_components/**",
+  "**/build/**",
+  "**/cache/**",
+  "**/db/**",
+  "**/deps/**",
+  "**/dist/**",
+  "**/extern/**",
+  "**/external/**",
+  "**/generated/**",
+  "**/Godeps/**",
+  "**/gradlew/**",
+  "**/mvnw/**",
+  "**/node_modules/**",
+  "**/protos/**",
+  "**/seed/**",
+  "**/target/**",
+  "**/templates/**",
+  "**/testdata/**",
+  "**/vendor/**",
+]
+
+test_patterns = [
+  "**/test/**",
+  "**/tests/**",
+  "python/tests/**",
+  "**/spec/**",
+  "**/*.test.*",
+  "**/*.spec.*",
+  "**/*_test.*",
+  "**/*_spec.*",
+  "**/test_*.*",
+  "**/spec_*.*",
+]
+
+[[source]]
+name = "default"
+default = true
+
+[[plugin]]
+name = "bandit"
+
+# pytest uses `assert` as its assertion API. Bandit B101 is a production
+# concern (asserts are stripped under -O). Keep production B101 enabled.
+[[triage]]
+match.plugins = ["bandit"]
+match.rules = ["bandit:B101"]
+match.file_patterns = ["python/tests/**", "**/tests/**", "**/test_*.py"]
+set.ignored = true
+
+# Synthetic tempfile / `/tmp/...` fixtures in tests. Production B108 remains
+# enabled so insecure temporary-file use in runtime Python still blocks.
+[[triage]]
+match.plugins = ["bandit"]
+match.rules = ["bandit:B108"]
+match.file_patterns = ["python/tests/**", "**/tests/**", "**/test_*.py"]
+set.ignored = true

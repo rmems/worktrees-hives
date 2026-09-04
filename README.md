@@ -91,6 +91,8 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
+The Qlty Cloud PR check is reproduced locally with `qlty check` (see [`.qlty/qlty.toml`](.qlty/qlty.toml)).
+
 ## Python package
 
 The Python bridge is planned in [GitHub #30](https://github.com/rmems/worktrees-hives/issues/30). Once that package lands under `python/`, install it in editable mode with the `test` extra so the `pytest` gate can run:
