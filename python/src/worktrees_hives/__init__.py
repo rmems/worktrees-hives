@@ -1,4 +1,4 @@
-"""worktrees-hives: Python orchestration for discovery, planning, and labs.
+"""worktrees-hives: Python orchestration for issue-to-PR, watchlist, discovery, planning, and labs.
 
 Orchestration policy only. Worktrees, path sandbox, branch checks, and safe
 ``git``/``gh`` execution belong to the Rust ``wh`` binary — use :class:`WhClient`.
