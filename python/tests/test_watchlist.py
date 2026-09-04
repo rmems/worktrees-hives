@@ -189,6 +189,21 @@ class TestWatchlistSchemaMigration:
         with pytest.raises(CorruptStateError, match="Unsupported"):
             Watchlist(state_path, allowed_owners=_TEST_OWNERS)
 
+    @pytest.mark.parametrize("schema", [1, 2])
+    def test_schema_version_int_1_or_2_loads(self, state_path: Path, schema: int) -> None:
+        """Integers 1 and 2 load, and the next mutation rewrites the file as v2."""
+        state_path.write_text(
+            json.dumps({"schema_version": schema, "jobs": {}}),
+            encoding="utf-8",
+        )
+        w = Watchlist(state_path, allowed_owners=_TEST_OWNERS)
+        assert w.list_jobs() == []
+
+        w.add("j1", "acme", "repo", "br")
+
+        reloaded = json.loads(state_path.read_text(encoding="utf-8"))
+        assert reloaded["schema_version"] == 2
+
 
 class TestWatchlistRemove:
     """Tests for Watchlist.remove."""
