@@ -4,7 +4,7 @@ Portable worker contract for any coding agent. Runs **after** [Safe Issue → Ve
 
 Safety rules live in [`AGENTS.md`](../../AGENTS.md), [`SKILL.md`](../../SKILL.md), and [`REVIEW.md`](../../REVIEW.md). This file does not relax them.
 
-Contract: Issue → PR [#8](https://github.com/rmems/worktrees-hives/issues/8) / Linear [RM-123](https://linear.app/rpd-34/issue/RM-123/issue-pr-workflow-never-auto-merge). Isolation prerequisite [#6](https://github.com/rmems/worktrees-hives/issues/6). Babysit is **not** this workflow ([#9](https://github.com/rmems/worktrees-hives/issues/9) / RM-124).
+Contract: Issue → PR [#8](https://github.com/rmems/worktrees-hives/issues/8) / Linear [RM-123](https://linear.app/rpd-34/issue/RM-123/issue-pr-workflow-never-auto-merge). Isolation prerequisite [#6](https://github.com/rmems/worktrees-hives/issues/6). Interactive monitoring, when needed after handoff, belongs to the installed companion `babysit-pr` skill rather than this workflow.
 
 ## Inputs
 
@@ -59,7 +59,7 @@ Linear: RM-<n>  <!-- omit this line if no twin exists -->
 - [ ] Local gates from README.md
 - [ ] CI on PR
 
-## Notes for babysit
+## Notes for review
 - Known residuals: ...
 ```
 
@@ -96,7 +96,7 @@ Abort the handoff and report a residual (do **not** merge, do not claim handoff 
 
 Comment on the GitHub issue with PR URL, the **validated** pushed commit SHA, residuals, and agent name. Mention the Linear twin only if it already exists.
 
-If an orchestrator is present, this handoff is what enqueueing babysit (#9) consumes. This workflow does not start babysit.
+If interactive monitoring is needed after handoff, invoke the installed companion `babysit-pr` skill. This workflow itself only creates or updates the PR and hands it off.
 
 ### 10. Never merge
 

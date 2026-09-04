@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use clap::{Parser, Subcommand};
 
-/// Manage isolated issue-to-PR and PR-babysit jobs.
+/// Manage isolated issue-to-PR jobs and their durable state.
 #[derive(Debug, Parser)]
 #[command(name = "wh", version, about, long_about = None)]
 struct Cli {

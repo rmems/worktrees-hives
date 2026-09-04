@@ -26,7 +26,7 @@ if TYPE_CHECKING:
 STATE_FILENAME = "watchlist.json"
 WH_WATCHLIST_PATH_ENV = "WH_WATCHLIST_PATH"
 WH_ALLOWED_OWNERS_ENV = "WH_ALLOWED_OWNERS"
-MAX_FIXES_CEILING = 3
+_LEGACY_BABYSIT_FIELDS: frozenset[str] = frozenset({"fix_count", "max_fixes", "babysit_cycle"})
 
 # Empty default — no org hardcoding. Configure via WH_ALLOWED_OWNERS or
 # Watchlist(allowed_owners=...). Empty allowlist = deny-by-default (no owner matches).
@@ -63,10 +63,6 @@ class JobState:
     branch: str
     status: JobStatus = JobStatus.PENDING
     stack_id: str | None = None
-    fix_count: int = 0
-    max_fixes: int = 3
-    # Identifies the current babysit cycle for fix-budget accounting (AGENTS.md).
-    babysit_cycle: str | None = None
     residual_blockers: list[str] = field(default_factory=list)
     pr_number: int | None = None
     pr_url: str | None = None
@@ -87,14 +83,25 @@ class JobState:
             JobStatus.BLOCKED,
         }
 
-    @property
-    def fix_budget_remaining(self) -> int:
-        """Return remaining fix commits allowed."""
-        return max(0, min(self.max_fixes, MAX_FIXES_CEILING) - self.fix_count)
 
-
-# Known JobState field names for additive-v1 compatibility (ignore extras on construct).
+# Known JobState field names for additive schema compatibility (ignore extras on construct).
 _JOB_STATE_FIELDS: frozenset[str] = frozenset(f.name for f in fields(JobState))
+
+# Persisted schema versions this build reads (v1 legacy, v2 current).
+_SUPPORTED_SCHEMA_VERSIONS: frozenset[int] = frozenset({1, 2})
+
+
+def _supported_schema_version(value: object) -> bool:
+    """Return True only for a real integer schema version 1 or 2.
+
+    Booleans, numeric strings, and floats are rejected so ``True``/``2.0``
+    cannot masquerade as accepted versions.
+    """
+    return (
+        isinstance(value, int)
+        and not isinstance(value, bool)
+        and value in _SUPPORTED_SCHEMA_VERSIONS
+    )
 
 
 def _default_state_path() -> Path:
@@ -222,26 +229,6 @@ def _read_json(path: Path) -> dict[str, Any]:
         ) from e
 
 
-def _validate_max_fixes(max_fixes: int) -> int:
-    """Validate max_fixes is in [0, MAX_FIXES_CEILING] for write paths (add)."""
-    if max_fixes < 0:
-        raise ValueError("max_fixes must be non-negative")
-    if max_fixes > MAX_FIXES_CEILING:
-        raise PolicyError(
-            "MAX_FIXES_CEILING",
-            f"max_fixes ({max_fixes}) exceeds safety ceiling ({MAX_FIXES_CEILING}). "
-            "Per AGENTS.md, at most 3 code-fix commits per PR per cycle.",
-        )
-    return max_fixes
-
-
-def _clamp_max_fixes(max_fixes: int) -> int:
-    """Clamp loaded max_fixes into [0, MAX_FIXES_CEILING] without dropping the job."""
-    if max_fixes < 0:
-        return 0
-    return min(max_fixes, MAX_FIXES_CEILING)
-
-
 def _owner_allowed(owner: str, allowed_owners: frozenset[str]) -> bool:
     """Return whether owner is within the configured repository scope.
 
@@ -266,7 +253,7 @@ class Watchlist:
     ) -> None:
         self._path = path or _default_state_path()
         self._jobs: dict[str, JobState] = {}
-        # Additive v1 fields (kind, worktree_path, timestamps, …) preserved per job.
+        # Additive fields (kind, worktree_path, timestamps, …) preserved per job.
         self._job_extras: dict[str, dict[str, Any]] = {}
         # Raw job records not active in this process (disallowed owner / unparseable).
         # Re-written on save so a partial load never permanently drops durable entries.
@@ -295,9 +282,10 @@ class Watchlist:
             yield
 
     def _load(self) -> None:
-        """Load state from disk; clamp max_fixes; filter by owner allowlist.
+        """Load v1/v2 state and filter jobs by the owner allowlist.
 
-        Unknown keys on job objects are treated as additive v1 fields: filtered
+        Legacy babysit-only fields are discarded during load. Unknown keys on
+        job objects are treated as additive fields: filtered
         out of JobState construction and preserved for round-trip on save so a
         compatible writer (e.g. Rust) does not lose watched jobs.
 
@@ -306,16 +294,12 @@ class Watchlist:
         """
         data = _read_json(self._path)
         schema = data.get("schema_version", 1)
-        try:
-            schema_i = int(schema)
-        except (TypeError, ValueError) as e:
-            raise CorruptStateError(f"Invalid schema_version in {self._path}: {schema!r}") from e
-        if schema_i > 1:
+        if not _supported_schema_version(schema):
             raise CorruptStateError(
-                f"Unsupported watchlist schema_version {schema_i} in {self._path} "
-                f"(this build supports 1 only)"
+                f"Unsupported watchlist schema_version {schema!r} in {self._path} "
+                f"(this build supports 1 and 2)"
             )
-        # Preserve unknown top-level keys for additive v1 round-trip.
+        # Preserve unknown top-level keys for additive round-trip.
         self._top_extras = {k: v for k, v in data.items() if k not in {"schema_version", "jobs"}}
         if "jobs" in data and not isinstance(data["jobs"], dict):
             # e.g. "jobs": [] from a bad recovery — do not normalize to {} and wipe on save.
@@ -336,17 +320,11 @@ class Watchlist:
                 # Preserve non-object entries under a wrapper so they are not dropped.
                 self._deferred_raw[jid] = {"_invalid_job_entry": job_dict}
                 continue
-            raw = dict(job_dict)
+            raw = {k: v for k, v in job_dict.items() if k not in _LEGACY_BABYSIT_FIELDS}
             try:
                 extras = {k: v for k, v in raw.items() if k not in _JOB_STATE_FIELDS}
                 d = {k: v for k, v in raw.items() if k in _JOB_STATE_FIELDS}
                 d["status"] = JobStatus(d["status"])
-                max_fixes = _clamp_max_fixes(int(d.get("max_fixes", 3)))
-                d["max_fixes"] = max_fixes
-                fix_count = int(d.get("fix_count", 0))
-                if fix_count < 0:
-                    fix_count = 0
-                d["fix_count"] = fix_count
                 owner = str(d["owner"])
                 if not _owner_allowed(owner, self._allowed_owners):
                     # Not scheduled, but keep durable record for later allowlist changes.
@@ -372,7 +350,7 @@ class Watchlist:
             status = job_dict.get("status")
             if isinstance(status, JobStatus):
                 job_dict["status"] = status.value
-            # Preserve additive v1 fields from compatible writers
+            # Preserve additive fields from compatible writers.
             for key, value in self._job_extras.get(jid, {}).items():
                 if key not in job_dict:
                     job_dict[key] = value
@@ -382,7 +360,7 @@ class Watchlist:
             if jid not in jobs:
                 jobs[jid] = raw
         data: dict[str, Any] = {
-            "schema_version": 1,
+            "schema_version": 2,
             "jobs": jobs,
         }
         for key, value in self._top_extras.items():
@@ -397,15 +375,12 @@ class Watchlist:
         repo: str,
         branch: str,
         stack_id: str | None = None,
-        max_fixes: int = 3,
     ) -> JobState:
         """Add a new job to the watchlist.
 
-        Raises ValueError if job_id already exists or max_fixes is negative.
-        Raises PolicyError if max_fixes exceeds the safety ceiling (3) or
-        owner is outside the configured allowlist.
+        Raises ValueError if job_id already exists and PolicyError if owner is
+        outside the configured allowlist.
         """
-        max_fixes = _validate_max_fixes(max_fixes)
         if not _owner_allowed(owner, self._allowed_owners):
             allow = sorted(self._allowed_owners)
             hint = (
@@ -426,7 +401,6 @@ class Watchlist:
                 repo=repo,
                 branch=branch,
                 stack_id=stack_id,
-                max_fixes=max_fixes,
             )
             self._jobs[job_id] = job
             try:
@@ -485,80 +459,6 @@ class Watchlist:
             self._save()
             return job
 
-    def begin_babysit_cycle(self, cycle_id: str, job_id: str | None = None) -> None:
-        """Start a babysit cycle, resetting fix_count for the cycle budget.
-
-        Per AGENTS.md the 3-fix cap is per babysit cycle. When ``cycle_id``
-        differs from the job's stored ``babysit_cycle``, ``fix_count`` resets
-        to 0. Pass ``job_id`` to scope one job; omit to apply to all active jobs.
-        """
-        if not cycle_id:
-            raise ValueError("cycle_id must be non-empty")
-        with self._locked():
-            targets = [job_id] if job_id is not None else list(self._jobs)
-            for jid in targets:
-                job = self._jobs.get(jid)
-                if job is None:
-                    if job_id is not None:
-                        raise KeyError(f"Job {job_id!r} not found in watchlist")
-                    continue
-                if job.babysit_cycle != cycle_id:
-                    job.babysit_cycle = cycle_id
-                    job.fix_count = 0
-            self._save()
-
-    def increment_fix_count(self, job_id: str, cycle_id: str | None = None) -> JobState:
-        """Increment the fix count for a job in the current babysit cycle.
-
-        Enforces both the per-job max_fixes budget and the global safety
-        ceiling (MAX_FIXES_CEILING) so a misconfigured max cannot exceed policy.
-
-        If ``cycle_id`` is provided and differs from the job's cycle, the
-        budget resets (new babysit cycle) before incrementing.
-
-        Raises KeyError if job_id not found.
-        Raises PolicyError if fix budget or safety ceiling is exhausted.
-        """
-        with self._locked():
-            job = self._jobs.get(job_id)
-            if job is None:
-                raise KeyError(f"Job {job_id!r} not found in watchlist")
-            if cycle_id is not None and job.babysit_cycle != cycle_id:
-                job.babysit_cycle = cycle_id
-                job.fix_count = 0
-            effective_max = min(job.max_fixes, MAX_FIXES_CEILING)
-            # AGENTS.md: cap is per PR per cycle — sum siblings sharing owner/repo/PR.
-            if job.pr_number is not None:
-                used = sum(
-                    j.fix_count
-                    for j in self._jobs.values()
-                    if j.owner == job.owner
-                    and j.repo == job.repo
-                    and j.pr_number == job.pr_number
-                    and j.babysit_cycle == job.babysit_cycle
-                )
-            else:
-                used = job.fix_count
-            if used >= effective_max:
-                raise PolicyError(
-                    "FIX_BUDGET_EXHAUSTED",
-                    f"Job {job_id!r} has exhausted its fix budget "
-                    f"({effective_max}; ceiling {MAX_FIXES_CEILING}"
-                    + (
-                        f"; PR #{job.pr_number} cycle total {used}"
-                        if job.pr_number is not None
-                        else ""
-                    )
-                    + ")",
-                )
-            job.fix_count += 1
-            try:
-                self._save()
-            except Exception:
-                job.fix_count -= 1
-                raise
-            return job
-
     def set_blockers(self, job_id: str, blockers: list[str]) -> JobState:
         """Set residual blockers for a job.
 
@@ -611,9 +511,9 @@ class Watchlist:
 
         Categories:
           - needs_pr: pending/actionable job with no PR yet (not already running)
-          - needs_fix: has residual blockers and remaining fix budget (not IN_PROGRESS)
+          - needs_fix: has residual blockers unless explicitly blocked or in progress
           - in_progress: IN_PROGRESS — defer; do not re-queue PR creation or fixes
-          - blocked: residual blockers with exhausted budget, or explicit BLOCKED status
+          - blocked: explicit BLOCKED status
           - ready: has PR, no residual blockers (awaiting merge / healthy)
           - done: COMPLETED or FAILED
 
@@ -621,8 +521,7 @@ class Watchlist:
         When ``record`` is True (default), updates each matched job's
         ``last_check`` timestamp and persists once.
 
-        Note: a green PR with remaining budget is **ready**, not needs_fix.
-        Exhausted budget with blockers is **blocked**, not ready.
+        A green PR with no residual blockers is **ready**.
         """
         if record:
             with self._locked():
@@ -656,17 +555,14 @@ class Watchlist:
             elif job.status == JobStatus.IN_PROGRESS:
                 # Active worker — never re-queue PR creation or concurrent fixes.
                 result["in_progress"].append(job)
-            elif job.residual_blockers:
-                if job.fix_budget_remaining > 0 and job.status != JobStatus.BLOCKED:
-                    result["needs_fix"].append(job)
-                else:
-                    result["blocked"].append(job)
             elif job.status == JobStatus.BLOCKED:
                 result["blocked"].append(job)
+            elif job.residual_blockers:
+                result["needs_fix"].append(job)
             elif job.pr_number is None:
                 result["needs_pr"].append(job)
             else:
-                # Has PR, no residual blockers — ready regardless of remaining budget
+                # Has PR, no residual blockers — ready.
                 result["ready"].append(job)
         if record and jobs:
             self._save()

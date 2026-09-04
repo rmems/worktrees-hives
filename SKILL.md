@@ -8,7 +8,7 @@ Use this skill when:
 - Discovering work from GitHub or Linear issues
 - Spawning worker subagents for code changes
 - Running [Safe Issue → Verified Commit](docs/workflows/safe-issue-verified-commit.md) then [Safe Verified Commit → PR](docs/workflows/safe-verified-commit-to-pr.md)
-- Babysitting pull requests through CI
+- Handing a pull request to the installed companion `babysit-pr` skill when interactive monitoring is needed
 - Executing a human-requested one-shot merge after the automated workflows end
 - Reporting results back to the operator
 
@@ -30,7 +30,7 @@ Use this skill when:
 
 ### Human-authorized one-shot merge protocol
 
-Discovery, issue-to-PR, babysit, scheduled, orchestrator, and worker-agent flows never merge. A merge is a separate host-level action available only to the primary agent in an active conversation with the human operator; it is not exposed through the Python/Rust runtime.
+Discovery, issue-to-PR, companion-skill monitoring, scheduled, orchestrator, and worker-agent flows never merge. A merge is a separate host-level action available only to the primary agent in an active conversation with the human operator; it is not exposed through the Python/Rust runtime.
 
 The primary interactive agent may execute exactly one immediate merge only when it completes every step:
 
@@ -42,7 +42,7 @@ The primary interactive agent may execute exactly one immediate merge only when 
 6. Prefer the GitHub MCP one-shot merge mutation. Shell `gh` is a fallback only when MCP cannot perform it and the same safeguards hold. Never enable auto-merge, enter a merge queue, schedule a merge, or use an admin bypass.
 7. Re-read the PR after the mutation. Report the method and merge commit SHA only after GitHub confirms the merged state, and claim the merge only if this agent invoked the successful operation.
 
-Permission to edit this policy or run a babysit cycle is not permission to merge a PR.
+Permission to edit this policy or invoke companion-skill monitoring is not permission to merge a PR.
 
 ### Allow-list for force-with-lease
 
@@ -54,16 +54,6 @@ Permission to edit this policy or run a babysit cycle is not permission to merge
 Before using `--force-with-lease`, the agent MUST:
 - Verify the current branch is the assigned worktree branch (not `main`, `master`, or another agent's branch).
 - Confirm the remote ref is what the agent expects (no unexpected pushes from others).
-
-### Fix-cap semantics
-
-**Rule:** Each PR gets a maximum of **3 code-fix commits** per babysit cycle.
-
-- **What counts:** Commits that change source code, tests, configuration, or documentation that affects behavior.
-- **What does not count:** Merge commits from rebasing, CI-triggered commits (e.g., lock file updates), reply comments on the PR.
-- **When the cap is hit:** The agent MUST stop committing and report residual issues as PR comments. The agent continues to reply to review comments and monitor CI, but does not push new code changes.
-- **Residual reporting:** When the cap is reached, the agent posts a comment listing: remaining CI failures, unresolved review threads, and recommended next steps for a human or next cycle.
-- **Reset:** The cap resets when the operator starts a new babysit cycle (explicit restart, not automatic).
 
 ### Branch/worktree pre-edit checklist
 
@@ -77,17 +67,6 @@ Before making any code change, the agent MUST verify:
 
 If any check fails, the agent MUST abort and report the mismatch.
 
-### Final status guidance
-
-When a babysit cycle ends (successfully or at cap), the agent reports:
-
-- **PR status:** Open / Ready for review / Blocked
-- **Fix count:** Number of code-fix commits pushed in this cycle (e.g., "2/3")
-- **Residual issues:** List of unresolved CI failures, review comments, or blockers
-- **Agent attribution:** Every PR comment and commit message includes agent identification
-
-A babysit or worker agent MUST NOT claim it merged the PR. A primary interactive agent may claim a merge only after it performed and verified the authorized one-shot operation. If another actor merged the PR, report that without taking credit.
-
 ### Platform-neutral worker prompt template
 
 When spawning a worker subagent, include these safety instructions in the prompt:
@@ -98,10 +77,8 @@ SAFETY RULES (non-negotiable):
 - NEVER use bare `git push --force` or `git push -f`
 - `git push --force-with-lease` is allowed only for rebasing your own branch
 - NEVER edit files outside your assigned worktree
-- NEVER commit more than 3 code-fix commits per babysit cycle
 - Before editing, verify: worktree path, branch name, clean state
 - After pushing, reply with SHA and agent attribution
-- When at cap, report residual issues; do not push more code
 ```
 
 Worker prompts remain strictly non-merging. Do not forward the primary agent's merge authorization to a worker or subagent.
@@ -110,8 +87,8 @@ Worker prompts remain strictly non-merging. Do not forward the primary agent's m
 
 These guardrails are enforced at multiple layers:
 
-1. **Agent skill (this file):** Portable documentation and prompt templates. Not a security boundary — agents may bypass if not constrained by the platform.
-2. **Python orchestrator:** Policy enforcement via the subprocess bridge. Counts fix commits, validates paths, and keeps unattended/runtime merge paths blocked before they reach Rust.
+1. **Agent skill (this file) and companion skill:** Portable documentation and prompt templates. Neither is a security boundary.
+2. **Python orchestrator:** Orchestration policy through the subprocess bridge; it does not reimplement Rust-owned worktree, branch, path, process, push, or runtime merge controls.
 3. **Rust core (`wh-core`):** Hard enforcement. Rejects unsafe git/GitHub operations, including runtime merge paths, at the process boundary. This is the authoritative safety layer for the product runtime.
 4. **Interactive host connector:** The only agent-side one-shot merge path, gated by the current human request and live preflight. It is unavailable to workers and unattended automation.
 

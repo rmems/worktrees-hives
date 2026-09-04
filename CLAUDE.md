@@ -56,7 +56,9 @@ Every Codex-authored commit must include the exact trailers `Agent: Codex` and `
 
 ## Human-authorized merges
 
-Merge authority is deny-by-default. The hive runtime, Python orchestrator, Rust CLI/core, babysit loops, scheduled jobs, and spawned worker agents never merge. Only the primary interactive agent may execute a one-shot merge after the human unambiguously identifies and affirmatively requests the exact pull request in the active conversation. A direct imperative such as “squash merge it” supplies approval when “it” clearly refers to the single current PR.
+Interactive PR monitoring belongs to the installed companion `babysit-pr` skill. That skill is portable operator guidance, not a security boundary. Rust `wh-core` remains the hard code-enforced boundary for worktree, branch, path, process, push, runtime no-merge, auto-merge, and merge-queue controls.
+
+Merge authority is deny-by-default. The hive runtime, Python orchestrator, Rust CLI/core, interactive monitoring flows, scheduled jobs, and spawned worker agents never merge. Only the primary interactive agent may execute a one-shot merge after the human unambiguously identifies and affirmatively requests the exact pull request in the active conversation. A direct imperative such as “squash merge it” supplies approval when “it” clearly refers to the single current PR.
 
 Follow the complete [human-authorized one-shot merge protocol in `AGENTS.md`](AGENTS.md#human-authorized-one-shot-merge-protocol). In particular:
 

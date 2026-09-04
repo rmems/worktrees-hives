@@ -1,4 +1,4 @@
-"""CLI for worktrees-hives Python orchestrator (entry: worktrees-hives / wh-orch).
+"""CLI for worktrees-hives discovery, planning, watchlist, and lab commands.
 
 Does NOT register as `wh` — that name is reserved for the Rust binary.
 """
@@ -12,7 +12,6 @@ import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from worktrees_hives.babysit import DEFAULT_ATTRIBUTION, MAX_FIX_COMMITS_PER_CYCLE
 from worktrees_hives.bridge import WhClient
 from worktrees_hives.discover import OwnerPolicyError
 from worktrees_hives.errors import FindingsValidationError, PolicyError
@@ -29,7 +28,6 @@ from worktrees_hives.watchlist import (
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from worktrees_hives.babysit import BabysitResult
     from worktrees_hives.discover import DiscoveryResult
     from worktrees_hives.stacks import PRInfo, Stack
 
@@ -41,7 +39,6 @@ def _print_job(job: JobState) -> None:
         print(f"    PR: {job.pr_url}")
     if job.residual_blockers:
         print(f"    Blockers: {', '.join(job.residual_blockers)}")
-    print(f"    Fixes: {job.fix_count}/{job.max_fixes}")
 
 
 def _watchlist_from_args(args: argparse.Namespace) -> Watchlist:
@@ -49,17 +46,17 @@ def _watchlist_from_args(args: argparse.Namespace) -> Watchlist:
     return Watchlist(Path(args.state) if args.state else None)
 
 
-def _v1_envelope(
+def _envelope(
     command: str,
     data: dict[str, object],
     *,
     ok: bool = True,
     error: dict[str, str] | None = None,
 ) -> dict[str, object]:
-    """Build a v1 CLI JSON envelope (schema_version=1)."""
+    """Build a Python CLI JSON envelope."""
     return {
         "ok": ok,
-        "schema_version": 1,
+        "schema_version": 2,
         "command": command,
         "data": data,
         "error": error,
@@ -77,10 +74,6 @@ def _job_to_json(job: JobState) -> dict[str, Any]:
         "stack_id": job.stack_id,
         "pr_number": job.pr_number,
         "pr_url": job.pr_url,
-        "fix_count": job.fix_count,
-        "max_fixes": job.max_fixes,
-        "fix_budget_remaining": job.fix_budget_remaining,
-        "babysit_cycle": job.babysit_cycle,
         "residual_blockers": list(job.residual_blockers),
         "last_check": job.last_check,
         "error": job.error,
@@ -102,7 +95,7 @@ def _emit_corrupt(command: str, err: CorruptStateError, *, as_json: bool) -> int
         empty = _CORRUPT_DATA.get(command, {})
         print(
             json.dumps(
-                _v1_envelope(
+                _envelope(
                     command,
                     empty,
                     ok=False,
@@ -124,10 +117,9 @@ def cmd_add(args: argparse.Namespace) -> int:
             repo=args.repo,
             branch=args.branch,
             stack_id=args.stack_id,
-            max_fixes=args.max_fixes,
         )
         if as_json:
-            print(json.dumps(_v1_envelope("watchlist.add", {"job": _job_to_json(job)})))
+            print(json.dumps(_envelope("watchlist.add", {"job": _job_to_json(job)})))
         else:
             print(f"Added job {job.job_id} to watchlist")
         return 0
@@ -138,7 +130,7 @@ def cmd_add(args: argparse.Namespace) -> int:
         if as_json:
             print(
                 json.dumps(
-                    _v1_envelope(
+                    _envelope(
                         "watchlist.add",
                         {},
                         ok=False,
@@ -152,7 +144,7 @@ def cmd_add(args: argparse.Namespace) -> int:
         if as_json:
             print(
                 json.dumps(
-                    _v1_envelope(
+                    _envelope(
                         "watchlist.add",
                         {},
                         ok=False,
@@ -171,9 +163,7 @@ def cmd_remove(args: argparse.Namespace) -> int:
         w.remove(args.job_id)
         if as_json:
             print(
-                json.dumps(
-                    _v1_envelope("watchlist.remove", {"job_id": args.job_id, "removed": True})
-                )
+                json.dumps(_envelope("watchlist.remove", {"job_id": args.job_id, "removed": True}))
             )
         else:
             print(f"Removed job {args.job_id} from watchlist")
@@ -185,7 +175,7 @@ def cmd_remove(args: argparse.Namespace) -> int:
         if as_json:
             print(
                 json.dumps(
-                    _v1_envelope(
+                    _envelope(
                         "watchlist.remove",
                         {"job_id": args.job_id, "removed": False},
                         ok=False,
@@ -206,7 +196,7 @@ def cmd_list(args: argparse.Namespace) -> int:
     except CorruptStateError as e:
         return _emit_corrupt("watchlist.list", e, as_json=as_json)
     if as_json:
-        print(json.dumps(_v1_envelope("watchlist.list", {"jobs": [_job_to_json(j) for j in jobs]})))
+        print(json.dumps(_envelope("watchlist.list", {"jobs": [_job_to_json(j) for j in jobs]})))
         return 0
     if not jobs:
         print("No jobs in watchlist")
@@ -227,7 +217,7 @@ def cmd_check(args: argparse.Namespace) -> int:
         return _emit_corrupt("watchlist.check", e, as_json=as_json)
     if as_json:
         data = {cat: [_job_to_json(j) for j in jobs] for cat, jobs in categories.items()}
-        print(json.dumps(_v1_envelope("watchlist.check", {"categories": data})))
+        print(json.dumps(_envelope("watchlist.check", {"categories": data})))
         return 0
     has_work = False
     for category, jobs in categories.items():
@@ -242,18 +232,16 @@ def cmd_check(args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Orchestration commands (discover / plan / babysit)
+# Orchestration commands (discover / plan)
 # ---------------------------------------------------------------------------
 
 
 def _fail(command: str, code: str, message: str, *, as_json: bool, exit_code: int) -> int:
-    """Report a failure on stderr and, under --json, as a v1 error envelope."""
+    """Report a failure on stderr and, under --json, as an error envelope."""
     print(f"Error: {message}", file=sys.stderr)
     if as_json:
         print(
-            json.dumps(
-                _v1_envelope(command, {}, ok=False, error={"code": code, "message": message})
-            )
+            json.dumps(_envelope(command, {}, ok=False, error={"code": code, "message": message}))
         )
     return exit_code
 
@@ -331,9 +319,7 @@ def cmd_discover(args: argparse.Namespace) -> int:
         if as_json:
             # format_for_orchestrator already emits the agreed shape — do not
             # build a second serializer that can drift from it.
-            print(
-                json.dumps(_v1_envelope("discover", discover_mod.format_for_orchestrator(result)))
-            )
+            print(json.dumps(_envelope("discover", discover_mod.format_for_orchestrator(result))))
         else:
             _print_discovery(result)
         return 0
@@ -480,7 +466,7 @@ def cmd_plan(args: argparse.Namespace) -> int:
                 ordered_all.append(_pr_to_json(pr, stack_id, position))
 
         if as_json:
-            print(json.dumps(_v1_envelope("plan", {"ordered": ordered_all})))
+            print(json.dumps(_envelope("plan", {"ordered": ordered_all})))
             return 0
 
         if not ordered_all:
@@ -500,92 +486,6 @@ def cmd_plan(args: argparse.Namespace) -> int:
         return 0
 
     return _guard("plan", as_json, run)
-
-
-def _babysit_result_to_json(result: BabysitResult) -> dict[str, Any]:
-    return {
-        "pr_number": result.pr_number,
-        "state": result.state.value,
-        "fix_commits_used": result.fix_commits_used,
-        "threads_resolved": result.threads_resolved,
-        "threads_remaining": result.threads_remaining,
-        "checks_passed": result.checks_passed,
-        "checks_failed": result.checks_failed,
-        "checks_pending": result.checks_pending,
-        "residual_blockers": list(result.residual_blockers),
-    }
-
-
-def cmd_babysit(args: argparse.Namespace) -> int:
-    """Run a babysit cycle over PRs in one repo. Never merges."""
-    as_json = getattr(args, "json", False)
-
-    def run() -> int:
-        from worktrees_hives.babysit import assert_owner_allowed, babysit_multiple
-
-        if not 0 <= args.max_fixes <= MAX_FIX_COMMITS_PER_CYCLE:
-            raise PolicyError(
-                "MAX_FIXES_CEILING",
-                f"--max-fixes {args.max_fixes} is outside the allowed range "
-                f"0-{MAX_FIX_COMMITS_PER_CYCLE} (AGENTS.md safety cap).",
-            )
-
-        pr_numbers = list(args.pr_numbers)
-        # argparse type=int accepts 0/negatives; each entry is a separate cycle
-        # with a fresh fix budget, so duplicates would also re-spend the cap.
-        if any(n <= 0 for n in pr_numbers):
-            raise ValueError(f"PR numbers must be positive integers, got {pr_numbers}")
-        if len(pr_numbers) != len(set(pr_numbers)):
-            raise ValueError(
-                f"duplicate PR numbers are not allowed (each PR is one cycle "
-                f"with its own fix budget): {pr_numbers}"
-            )
-
-        # babysit_multiple swallows per-PR exceptions into PRState.UNKNOWN and
-        # always returns a result list, so an empty/disallowed allowlist would
-        # otherwise look like a successful exit-0 cycle that did no work.
-        # Fail closed here with exit 2 before any GitHub mutations.
-        try:
-            assert_owner_allowed(args.owner)
-        except ValueError as e:
-            raise PolicyError("OWNER_NOT_ALLOWED", str(e)) from e
-
-        results = babysit_multiple(
-            owner=args.owner,
-            repo=args.repo,
-            pr_numbers=pr_numbers,
-            attribution=args.attribution,
-            max_fixes=args.max_fixes,
-        )
-        if as_json:
-            print(
-                json.dumps(
-                    _v1_envelope(
-                        "babysit",
-                        {"results": [_babysit_result_to_json(r) for r in results]},
-                    )
-                )
-            )
-            return 0
-
-        for result in results:
-            print(f"\nPR #{result.pr_number}: {result.state.value}")
-            print(f"  Fixes applied: {result.fix_commits_used}/{args.max_fixes}")
-            print(
-                f"  Threads resolved: {result.threads_resolved}, "
-                f"remaining: {result.threads_remaining}"
-            )
-            print(
-                f"  Checks: {result.checks_passed} passed, {result.checks_failed} failed, "
-                f"{result.checks_pending} pending"
-            )
-            for blocker in result.residual_blockers:
-                print(f"  Blocker: {blocker}")
-        # Merge-ready is not merged; this tool never merges.
-        print("\nNo PR was merged — merging remains a human decision.")
-        return 0
-
-    return _guard("babysit", as_json, run)
 
 
 def cmd_lab_run(args: argparse.Namespace) -> int:
@@ -639,7 +539,7 @@ def cmd_lab_run(args: argparse.Namespace) -> int:
         if as_json:
             print(
                 json.dumps(
-                    _v1_envelope(
+                    _envelope(
                         "lab.run",
                         result.to_dict(),
                         ok=result.ok,
@@ -689,7 +589,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--json",
         action="store_true",
-        help="Emit a v1 JSON envelope on stdout (diagnostics on stderr)",
+        help="Emit a v2 JSON envelope on stdout (diagnostics on stderr)",
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -707,7 +607,6 @@ def main(argv: list[str] | None = None) -> int:
     add_p.add_argument("repo", help="Repository name")
     add_p.add_argument("branch", help="Branch name")
     add_p.add_argument("--stack-id", help="Stack membership identifier")
-    add_p.add_argument("--max-fixes", type=int, default=3, help="Max fix commits (default: 3)")
 
     # watchlist remove
     rm_p = wl_sub.add_parser("remove", help="Remove a job from the watchlist")
@@ -779,37 +678,7 @@ def main(argv: list[str] | None = None) -> int:
         help="Skip owner allowlist filtering",
     )
 
-    # babysit
-    baby_p = sub.add_parser(
-        "babysit",
-        help="Run a babysit cycle over PRs in one repo (never merges)",
-    )
-    baby_p.add_argument("--owner", required=True, help="Repository owner")
-    baby_p.add_argument("--repo", required=True, help="Repository name")
-    baby_p.add_argument(
-        "pr_numbers",
-        nargs="+",
-        type=int,
-        metavar="PR",
-        help=(
-            "PR numbers in bottom-up stack order. Ordering is not computed here: "
-            "take it from `worktrees-hives plan`. Out-of-order input defers "
-            "children behind a blocked parent incorrectly."
-        ),
-    )
-    baby_p.add_argument(
-        "--max-fixes",
-        type=int,
-        default=MAX_FIX_COMMITS_PER_CYCLE,
-        help=f"Max code-fix commits per PR per cycle (default: {MAX_FIX_COMMITS_PER_CYCLE})",
-    )
-    baby_p.add_argument(
-        "--attribution",
-        default=DEFAULT_ATTRIBUTION,
-        help=f"Attribution prefixed to review replies (default: {DEFAULT_ATTRIBUTION!r})",
-    )
-
-    # lab (hypothesis lab — not babysit)
+    # lab
     lab_p = sub.add_parser(
         "lab",
         help="Hypothesis lab (allocate worktrees, enforce findings; never merges)",
@@ -891,7 +760,6 @@ def main(argv: list[str] | None = None) -> int:
     handlers = {
         "discover": cmd_discover,
         "plan": cmd_plan,
-        "babysit": cmd_babysit,
     }
     handler = handlers.get(args.command)
     if handler is None:

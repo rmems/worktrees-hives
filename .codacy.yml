@@ -1,0 +1,25 @@
+# Codacy org quality gate uses issueThreshold=0.
+# Test asserts trip Bandit B101 as High Security; synthetic fixtures and
+# cloned test helpers trip duplication / clone rules. Agent-policy docs trip
+# Agentlinter on deny-by-default merge language. Exclude those surfaces from
+# the gate without weakening production analysis or rewriting AGENTS.md /
+# CLAUDE.md safety text.
+---
+exclude_paths:
+  - "python/tests/**"
+  - "**/tests/**"
+  - "**/test_*.py"
+  - "AGENTS.md"
+  - "CLAUDE.md"
+
+engines:
+  duplication:
+    exclude_paths:
+      - "python/tests/**"
+      - "**/tests/**"
+      - "**/test_*.py"
+  complexity:
+    exclude_paths:
+      - "python/tests/**"
+      - "**/tests/**"
+      - "**/test_*.py"

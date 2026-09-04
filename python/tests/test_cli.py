@@ -1,9 +1,9 @@
 """Tests for the worktrees-hives CLI surface.
 
 Covers the orchestration commands wired on top of the policy modules. Network
-and subprocess work is stubbed at the module boundary (``discover_all``,
-``fetch_pr_infos``, ``babysit_multiple``) so these tests exercise argument
-parsing, output rendering, the v1 JSON envelope, and the exit-code contract.
+and subprocess work is stubbed at the module boundary (``discover_all`` and
+``fetch_pr_infos``) so these tests exercise argument parsing, output rendering,
+the v2 JSON envelope, and the exit-code contract.
 """
 
 from __future__ import annotations
@@ -12,8 +12,6 @@ import json
 
 import pytest
 
-from worktrees_hives.babysit import BabysitResult
-from worktrees_hives.babysit import PRState as BabysitPRState
 from worktrees_hives.cli import main
 from worktrees_hives.discover import DiscoveryResult, Issue
 from worktrees_hives.errors import PolicyError
@@ -90,7 +88,7 @@ class TestDiscover:
         assert main(["--json", "discover"]) == 0
         env = _envelope(capsys)
         assert env["ok"] is True
-        assert env["schema_version"] == 1
+        assert env["schema_version"] == 2
         assert env["command"] == "discover"
         assert env["data"]["total_issues"] == 1
         assert env["data"]["issues"][0]["number"] == 4
@@ -288,223 +286,20 @@ class TestPlan:
 
 
 # ---------------------------------------------------------------------------
-# babysit
-# ---------------------------------------------------------------------------
-
-
-def _allow_owner(monkeypatch, owner: str = OWNER) -> None:
-    """Configure WH_ALLOWED_OWNERS so babysit CLI fail-closed checks pass."""
-    monkeypatch.setenv("WH_ALLOWED_OWNERS", owner)
-
-
-class TestBabysit:
-    def test_forwards_arguments_in_given_order(self, monkeypatch):
-        _allow_owner(monkeypatch)
-        seen = {}
-
-        def fake(**kwargs):
-            seen.update(kwargs)
-            return []
-
-        monkeypatch.setattr("worktrees_hives.babysit.babysit_multiple", fake)
-        main(
-            [
-                "babysit",
-                "--owner",
-                OWNER,
-                "--repo",
-                REPO,
-                "3",
-                "1",
-                "2",
-                "--max-fixes",
-                "2",
-                "--attribution",
-                "Test agent",
-            ]
-        )
-        assert seen["owner"] == OWNER
-        assert seen["repo"] == REPO
-        # Order is the caller's contract (bottom-up); the CLI must not re-sort.
-        assert seen["pr_numbers"] == [3, 1, 2]
-        assert seen["max_fixes"] == 2
-        assert seen["attribution"] == "Test agent"
-
-    def test_defaults_match_the_safety_cap(self, monkeypatch):
-        from worktrees_hives.babysit import DEFAULT_ATTRIBUTION, MAX_FIX_COMMITS_PER_CYCLE
-
-        _allow_owner(monkeypatch)
-        seen = {}
-
-        def fake(**kwargs):
-            seen.update(kwargs)
-            return []
-
-        monkeypatch.setattr("worktrees_hives.babysit.babysit_multiple", fake)
-        main(["babysit", "--owner", OWNER, "--repo", REPO, "5"])
-        assert seen["max_fixes"] == MAX_FIX_COMMITS_PER_CYCLE
-        assert seen["attribution"] == DEFAULT_ATTRIBUTION
-
-    def test_human_output_never_claims_a_merge(self, monkeypatch, capsys):
-        _allow_owner(monkeypatch)
-        results = [
-            BabysitResult(
-                pr_number=1,
-                state=BabysitPRState.HEALTHY,
-                residual_blockers=[],
-            )
-        ]
-        monkeypatch.setattr("worktrees_hives.babysit.babysit_multiple", lambda **kw: results)
-        assert main(["babysit", "--owner", OWNER, "--repo", REPO, "1"]) == 0
-        out = capsys.readouterr().out
-        assert "No PR was merged" in out
-        assert "merged successfully" not in out.lower()
-
-    def test_reports_residual_blockers(self, monkeypatch, capsys):
-        _allow_owner(monkeypatch)
-        results = [
-            BabysitResult(
-                pr_number=4,
-                state=BabysitPRState.UNKNOWN,
-                residual_blockers=["CI red: build"],
-            )
-        ]
-        monkeypatch.setattr("worktrees_hives.babysit.babysit_multiple", lambda **kw: results)
-        main(["babysit", "--owner", OWNER, "--repo", REPO, "4"])
-        assert "CI red: build" in capsys.readouterr().out
-
-    def test_json_envelope(self, monkeypatch, capsys):
-        _allow_owner(monkeypatch)
-        results = [
-            BabysitResult(
-                pr_number=4,
-                state=BabysitPRState.UNKNOWN,
-                residual_blockers=["conflict"],
-            )
-        ]
-        monkeypatch.setattr("worktrees_hives.babysit.babysit_multiple", lambda **kw: results)
-        assert main(["--json", "babysit", "--owner", OWNER, "--repo", REPO, "4"]) == 0
-        env = _envelope(capsys)
-        assert env["command"] == "babysit"
-        entry = env["data"]["results"][0]
-        assert entry["pr_number"] == 4
-        assert entry["residual_blockers"] == ["conflict"]
-
-    def test_non_integer_pr_number_is_rejected(self):
-        with pytest.raises(SystemExit):
-            main(["babysit", "--owner", OWNER, "--repo", REPO, "not-a-number"])
-
-    def test_max_fixes_above_ceiling_exits_2(self, monkeypatch, capsys):
-        from worktrees_hives.babysit import MAX_FIX_COMMITS_PER_CYCLE
-
-        # Ceiling is checked before allowlist so we need not configure owners,
-        # but set one so a regression that reorders checks still fails closed
-        # on max-fixes rather than flaking on allowlist.
-        _allow_owner(monkeypatch)
-        monkeypatch.setattr("worktrees_hives.babysit.babysit_multiple", lambda **kw: [])
-        assert (
-            main(
-                [
-                    "babysit",
-                    "--owner",
-                    OWNER,
-                    "--repo",
-                    REPO,
-                    "1",
-                    "--max-fixes",
-                    str(MAX_FIX_COMMITS_PER_CYCLE + 1),
-                ]
-            )
-            == 2
-        )
-        assert "safety cap" in capsys.readouterr().err
-
-    def test_empty_allowlist_exits_2_without_running_cycle(self, monkeypatch, capsys):
-        """Fail closed: empty WH_ALLOWED_OWNERS must not look like success."""
-        called = {"n": 0}
-
-        def fake(**kwargs):
-            called["n"] += 1
-            return []
-
-        monkeypatch.delenv("WH_ALLOWED_OWNERS", raising=False)
-        monkeypatch.setattr("worktrees_hives.babysit.babysit_multiple", fake)
-        assert main(["babysit", "--owner", OWNER, "--repo", REPO, "1"]) == 2
-        err = capsys.readouterr().err
-        assert "allowlist empty" in err.lower() or "OWNER" in err or "allowed" in err.lower()
-        assert called["n"] == 0
-
-    def test_disallowed_owner_exits_2_json_envelope(self, monkeypatch, capsys):
-        called = {"n": 0}
-
-        def fake(**kwargs):
-            called["n"] += 1
-            return []
-
-        monkeypatch.setenv("WH_ALLOWED_OWNERS", "someone-else")
-        monkeypatch.setattr("worktrees_hives.babysit.babysit_multiple", fake)
-        assert main(["--json", "babysit", "--owner", OWNER, "--repo", REPO, "1"]) == 2
-        env = _envelope(capsys)
-        assert env["ok"] is False
-        assert env["command"] == "babysit"
-        assert env["error"]["code"] == "OWNER_NOT_ALLOWED"
-        assert called["n"] == 0
-
-    def test_duplicate_pr_numbers_rejected_before_cycle(self, monkeypatch, capsys):
-        _allow_owner(monkeypatch)
-        called = {"n": 0}
-
-        def fake(**kwargs):
-            called["n"] += 1
-            return []
-
-        monkeypatch.setattr("worktrees_hives.babysit.babysit_multiple", fake)
-        assert main(["babysit", "--owner", OWNER, "--repo", REPO, "1", "2", "1"]) == 1
-        assert "duplicate PR" in capsys.readouterr().err
-        assert called["n"] == 0
-
-    def test_non_positive_pr_number_rejected_before_cycle(self, monkeypatch, capsys):
-        _allow_owner(monkeypatch)
-        called = {"n": 0}
-
-        def fake(**kwargs):
-            called["n"] += 1
-            return []
-
-        monkeypatch.setattr("worktrees_hives.babysit.babysit_multiple", fake)
-        assert main(["babysit", "--owner", OWNER, "--repo", REPO, "0"]) == 1
-        assert "positive" in capsys.readouterr().err
-        assert called["n"] == 0
-
-    def test_json_envelope_includes_check_and_thread_counts(self, monkeypatch, capsys):
-        _allow_owner(monkeypatch)
-        results = [
-            BabysitResult(
-                pr_number=4,
-                state=BabysitPRState.UNKNOWN,
-                threads_resolved=2,
-                threads_remaining=1,
-                checks_passed=3,
-                checks_failed=1,
-                checks_pending=0,
-                residual_blockers=["conflict"],
-            )
-        ]
-        monkeypatch.setattr("worktrees_hives.babysit.babysit_multiple", lambda **kw: results)
-        assert main(["--json", "babysit", "--owner", OWNER, "--repo", REPO, "4"]) == 0
-        entry = _envelope(capsys)["data"]["results"][0]
-        assert entry["threads_remaining"] == 1
-        assert entry["checks_passed"] == 3
-        assert entry["checks_failed"] == 1
-        assert entry["checks_pending"] == 0
-
-
-# ---------------------------------------------------------------------------
 # dispatch
 # ---------------------------------------------------------------------------
 
 
 class TestDispatch:
+    def test_help_omits_removed_babysit_command(self, capsys):
+        with pytest.raises(SystemExit) as exc:
+            main(["--help"])
+        assert exc.value.code == 0
+        out = capsys.readouterr().out
+        assert "discover" in out
+        assert "plan" in out
+        assert "babysit" not in out
+
     def test_watchlist_still_routes(self, tmp_path, capsys):
         state = tmp_path / "wl.json"
         assert main(["--state", str(state), "watchlist", "list"]) == 0

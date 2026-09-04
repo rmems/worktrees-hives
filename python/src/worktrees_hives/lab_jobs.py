@@ -2,7 +2,7 @@
 
 Maps **hypothesis_id → agent|subagent → sandboxed worktree**. Worktree
 mutations go only through :class:`~worktrees_hives.bridge.WhClient`
-(``wh worktree create|remove``). This module is **not** PR babysit state
+(``wh worktree create|remove``). This module is **not** local watchlist state
 (:class:`~worktrees_hives.watchlist.JobState` / ``Watchlist``).
 
 Persistence (explicit)
@@ -20,8 +20,8 @@ Writes are atomic (temp file + rename) under a cross-process exclusive lock.
 Teardown keeps a tombstone with status ``torn_down``.
 
 Owner allowlist: multi-owner scheduling is **deny-by-default** when
-``WH_ALLOWED_OWNERS`` / ``allowed_owners`` is empty (same policy as babysit
-discovery). Explicit non-empty allowlist required to allocate.
+``WH_ALLOWED_OWNERS`` / ``allowed_owners`` is empty (same deny-by-default
+policy as watchlist discovery). Explicit non-empty allowlist required to allocate.
 
 Default policy: no production remote mutation (no merge / bare force-push APIs).
 """
@@ -107,7 +107,7 @@ _LAB_JOB_FIELDS = frozenset(
 
 @dataclass(frozen=True, slots=True)
 class LabJob:
-    """One lab hypothesis job (not a babysit PR job)."""
+    """One lab hypothesis job (not a local watchlist job)."""
 
     job_id: str
     hypothesis_id: str
