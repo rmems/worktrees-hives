@@ -87,6 +87,22 @@ class JobState:
 # Known JobState field names for additive schema compatibility (ignore extras on construct).
 _JOB_STATE_FIELDS: frozenset[str] = frozenset(f.name for f in fields(JobState))
 
+# Persisted schema versions this build reads (v1 legacy, v2 current).
+_SUPPORTED_SCHEMA_VERSIONS: frozenset[int] = frozenset({1, 2})
+
+
+def _supported_schema_version(value: object) -> bool:
+    """Return True only for a real integer schema version 1 or 2.
+
+    Booleans, numeric strings, and floats are rejected so ``True``/``2.0``
+    cannot masquerade as accepted versions.
+    """
+    return (
+        isinstance(value, int)
+        and not isinstance(value, bool)
+        and value in _SUPPORTED_SCHEMA_VERSIONS
+    )
+
 
 def _default_state_path() -> Path:
     """Return the default Python watchlist state file path.
@@ -278,7 +294,7 @@ class Watchlist:
         """
         data = _read_json(self._path)
         schema = data.get("schema_version", 1)
-        if not isinstance(schema, int) or isinstance(schema, bool) or schema not in {1, 2}:
+        if not _supported_schema_version(schema):
             raise CorruptStateError(
                 f"Unsupported watchlist schema_version {schema!r} in {self._path} "
                 f"(this build supports 1 and 2)"
