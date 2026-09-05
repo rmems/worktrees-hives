@@ -27,15 +27,27 @@ from worktrees_hives.paths import default_worktree_base
 
 TEST_OWNER = "acme"
 TEST_REPO = "example-repo"
+TEST_COMMIT = "a" * 40
 
 
 def _ok_create(
-    path: str = "/tmp/wt/acme/example-repo/gh-1", branch: str = "hive/gh-1"
+    path: str = "/tmp/wt-base/acme/example-repo/gh-1",
+    branch: str = "hive/gh-1",
+    start_commit: object = TEST_COMMIT,
+    head_commit: object = TEST_COMMIT,
 ) -> SuccessResponse:
     return SuccessResponse(
         command="worktree.create",
-        data={"path": path, "branch": branch, "repo_root": "/tmp/repo"},
-        schema_version=1,
+        data={
+            "path": path,
+            "branch": branch,
+            "branch_ref": f"refs/heads/{branch}",
+            "repo_root": "/tmp/repo",
+            "start_commit": start_commit,
+            "head_commit": head_commit,
+            "worktree_registered": True,
+        },
+        schema_version=2,
     )
 
 
@@ -114,7 +126,7 @@ class TestAllowlist:
     def test_denied_owner(self):
         mgr, wh = _manager(allowed_owners=frozenset({TEST_OWNER}))
         with pytest.raises(ClaimError, match="allowlist"):
-            mgr.claim_issue("other-org", TEST_REPO, 1)
+            mgr.claim_issue("other-org", TEST_REPO, 1, base_ref="origin/main")
         wh.run.assert_not_called()
 
     def test_empty_allowlist_allows_any(self):
@@ -123,7 +135,7 @@ class TestAllowlist:
             path="/tmp/wt-base/other/example-repo/gh-2",
             branch="hive/gh-2",
         )
-        result = mgr.claim_issue("other", TEST_REPO, 2)
+        result = mgr.claim_issue("other", TEST_REPO, 2, base_ref="origin/main")
         assert result.owner == "other"
         wh.run.assert_called()
 
@@ -138,21 +150,36 @@ class TestClaimIssue:
         mgr, wh = _manager()
         path = "/tmp/wt-base/acme/example-repo/gh-8"
         wh.run.return_value = _ok_create(path=path, branch="hive/gh-8")
-        result = mgr.claim_issue(TEST_OWNER, TEST_REPO, 8)
+        result = mgr.claim_issue(TEST_OWNER, TEST_REPO, 8, base_ref="origin/release")
         assert result.branch == "hive/gh-8"
         assert result.job_id == "gh-8"
         assert result.issue_number == 8
         assert result.owns_branch is True
         assert result.worktree_path == path
+        assert result.start_commit == TEST_COMMIT
         args = wh.run.call_args[0]
-        assert args[0:3] == ("worktree", "create", "--repo")
-        assert args[3] == os.path.abspath("/tmp/repo")
-        assert args[4:8] == (TEST_OWNER, TEST_REPO, "gh-8", "hive/gh-8")
+        assert args[0:4] == ("worktree", "create", "--schema-version", "2")
+        assert args[4:6] == ("--repo", os.path.abspath("/tmp/repo"))
+        assert args[6:8] == ("--start-point", "origin/release")
+        assert args[8:12] == (TEST_OWNER, TEST_REPO, "gh-8", "hive/gh-8")
+
+    @pytest.mark.parametrize("commit", ["a" * 40, "b" * 64])
+    def test_uppercase_full_start_point_is_normalized_before_dispatch(self, commit: str):
+        mgr, wh = _manager()
+        wh.run.return_value = _ok_create(start_commit=commit, head_commit=commit)
+        result = mgr.claim_issue(
+            TEST_OWNER,
+            TEST_REPO,
+            1,
+            base_ref=commit.upper(),
+        )
+        assert result.start_commit == commit
+        assert wh.run.call_args.args[7] == commit
 
     def test_rejects_non_positive_issue(self):
         mgr, wh = _manager()
         with pytest.raises(ClaimError, match="issue_number"):
-            mgr.claim_issue(TEST_OWNER, TEST_REPO, 0)
+            mgr.claim_issue(TEST_OWNER, TEST_REPO, 0, base_ref="origin/main")
         wh.run.assert_not_called()
 
     def test_exists_raises_without_wh(self, tmp_path: Path):
@@ -161,14 +188,14 @@ class TestClaimIssue:
         existing.mkdir(parents=True)
         mgr, wh = _manager(worktree_base=str(base))
         with pytest.raises(ClaimExistsError):
-            mgr.claim_issue(TEST_OWNER, TEST_REPO, 1)
+            mgr.claim_issue(TEST_OWNER, TEST_REPO, 1, base_ref="origin/main")
         wh.run.assert_not_called()
 
     def test_branch_mismatch_isolation(self):
         mgr, wh = _manager()
         wh.run.return_value = _ok_create(branch="wrong-branch")
-        with pytest.raises(IsolationError, match="expected"):
-            mgr.claim_issue(TEST_OWNER, TEST_REPO, 1)
+        with pytest.raises(ClaimError, match="branch identity"):
+            mgr.claim_issue(TEST_OWNER, TEST_REPO, 1, base_ref="origin/main")
 
 
 class TestClaimPr:
@@ -181,13 +208,15 @@ class TestClaimPr:
             TEST_REPO,
             9,
             head_branch="feature/pr-head",
-            head_sha="abc1234",
+            head_sha=TEST_COMMIT,
         )
         assert result.pr_number == 9
         assert result.job_id == "pr-9"
         assert result.owns_branch is False
         assert result.branch == "feature/pr-head"
+        assert result.start_commit == TEST_COMMIT
         args = wh.run.call_args[0]
+        assert args[6:8] == ("--start-point", TEST_COMMIT)
         assert args[-1] == "feature/pr-head"
         assert args[-2] == "pr-9"
 
@@ -196,6 +225,63 @@ class TestClaimPr:
         with pytest.raises(ClaimError, match="head_sha"):
             mgr.claim_pr(TEST_OWNER, TEST_REPO, 1, head_branch="feat", head_sha="not-hex!!")
         wh.run.assert_not_called()
+
+    def test_rejects_abbreviated_sha(self):
+        mgr, wh = _manager()
+        with pytest.raises(ClaimError, match="head_sha"):
+            mgr.claim_pr(TEST_OWNER, TEST_REPO, 1, head_branch="feat", head_sha="abc1234")
+        wh.run.assert_not_called()
+
+    @pytest.mark.parametrize("commit", ["a" * 40, "b" * 64])
+    def test_uppercase_full_sha_is_normalized_before_dispatch(self, commit: str):
+        mgr, wh = _manager()
+        wh.run.return_value = _ok_create(
+            path="/tmp/wt-base/acme/example-repo/pr-9",
+            branch="feature/pr-head",
+            start_commit=commit,
+            head_commit=commit,
+        )
+        result = mgr.claim_pr(
+            TEST_OWNER,
+            TEST_REPO,
+            9,
+            head_branch="feature/pr-head",
+            head_sha=commit.upper(),
+        )
+        assert result.start_commit == commit
+        assert wh.run.call_args.args[7] == commit
+
+    def test_full_sha_response_must_match_request(self):
+        mgr, wh = _manager()
+        wh.run.return_value = _ok_create(
+            branch="feature/pr-head", start_commit="b" * 40, head_commit="b" * 40
+        )
+        with pytest.raises(ClaimError, match="requested full object id"):
+            mgr.claim_pr(
+                TEST_OWNER,
+                TEST_REPO,
+                9,
+                head_branch="feature/pr-head",
+                head_sha=TEST_COMMIT,
+            )
+
+
+class TestVerifiedCommitResponse:
+    @pytest.mark.parametrize(
+        ("start_commit", "head_commit", "message"),
+        [
+            (None, TEST_COMMIT, "start_commit"),
+            ("not-a-sha", TEST_COMMIT, "start_commit"),
+            (TEST_COMMIT, "b" * 40, "does not equal"),
+        ],
+    )
+    def test_missing_malformed_or_mismatched_response(
+        self, start_commit: object, head_commit: object, message: str
+    ) -> None:
+        mgr, wh = _manager()
+        wh.run.return_value = _ok_create(start_commit=start_commit, head_commit=head_commit)
+        with pytest.raises(ClaimError, match=message):
+            mgr.claim_issue(TEST_OWNER, TEST_REPO, 1, base_ref="origin/main")
 
 
 # ---------------------------------------------------------------------------
@@ -208,19 +294,20 @@ class TestWhFailures:
         mgr, wh = _manager()
         wh.run.side_effect = WhBinaryNotFoundError("no wh")
         with pytest.raises(ClaimError, match="wh binary not found"):
-            mgr.claim_issue(TEST_OWNER, TEST_REPO, 1)
+            mgr.claim_issue(TEST_OWNER, TEST_REPO, 1, base_ref="origin/main")
 
     def test_process_error(self):
         mgr, wh = _manager()
         wh.run.side_effect = WhProcessError(returncode=1, stderr="boom")
         with pytest.raises(ClaimError, match="wh exited 1"):
-            mgr.claim_issue(TEST_OWNER, TEST_REPO, 1)
+            mgr.claim_issue(TEST_OWNER, TEST_REPO, 1, base_ref="origin/main")
 
     def test_policy_error(self):
         mgr, wh = _manager()
-        wh.run.side_effect = PolicyError("sandbox", "path escape")
-        with pytest.raises(ClaimError, match="policy"):
-            mgr.claim_issue(TEST_OWNER, TEST_REPO, 1)
+        wh.run.side_effect = PolicyError("sandbox", "path escape", data={"path": "/tmp/residual"})
+        with pytest.raises(ClaimError, match="policy") as exc_info:
+            mgr.claim_issue(TEST_OWNER, TEST_REPO, 1, base_ref="origin/main")
+        assert exc_info.value.data == {"path": "/tmp/residual"}
 
     def test_error_response(self):
         mgr, wh = _manager()
@@ -228,9 +315,11 @@ class TestWhFailures:
             command="worktree.create",
             error=ErrorData(code="E", message="nope"),
             schema_version=1,
+            data={"path": "/tmp/residual"},
         )
-        with pytest.raises(ClaimError, match="worktree create failed"):
-            mgr.claim_issue(TEST_OWNER, TEST_REPO, 1)
+        with pytest.raises(ClaimError, match="worktree create failed") as exc_info:
+            mgr.claim_issue(TEST_OWNER, TEST_REPO, 1, base_ref="origin/main")
+        assert exc_info.value.data == {"path": "/tmp/residual"}
 
 
 # ---------------------------------------------------------------------------

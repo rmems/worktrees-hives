@@ -25,7 +25,12 @@ from enum import StrEnum
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
 from worktrees_hives.bridge import WhClient
-from worktrees_hives.contract import SuccessResponse
+from worktrees_hives.contract import (
+    SuccessResponse,
+    WorktreeCreateRequest,
+    parse_verified_worktree_creation,
+    validate_start_point_request,
+)
 from worktrees_hives.errors import WhError
 from worktrees_hives.paths import default_worktree_base as _default_worktree_base
 
@@ -54,8 +59,9 @@ class IssueToPrConfig:
     issue_number:
         The GitHub issue number to convert into a PR.
     base_branch:
-        Branch to create the feature branch from (default ``"main"``).
-        Validated like remotes — must not be option-looking.
+        Explicit pull-request target branch. No repository-wide default is assumed.
+    start_point:
+        Explicit commit or ref at which Rust must create the feature branch.
     remote:
         Git remote name to push to (default ``"origin"``).
     repo_path:
@@ -74,7 +80,8 @@ class IssueToPrConfig:
     owner: str
     repo: str
     issue_number: int
-    base_branch: str = "main"
+    base_branch: str
+    start_point: str
     remote: str = "origin"
     repo_path: str = field(default_factory=os.getcwd)
     pr_labels: list[str] = field(default_factory=list)
@@ -107,8 +114,15 @@ class Step(StrEnum):
 class IssueToPrError(WhError):
     """Raised when the issue-to-PR workflow encounters an unrecoverable error."""
 
-    def __init__(self, step: Step, detail: str) -> None:
+    def __init__(
+        self,
+        step: Step,
+        detail: str,
+        *,
+        data: dict[str, object] | None = None,
+    ) -> None:
         self.step = step
+        self.data = dict(data or {})
         super().__init__(f"IssueToPr failed at step '{step.value}': {detail}")
 
 
@@ -125,6 +139,7 @@ class IssueToPrResult:
     worktree_path: str
     pr_number: int
     pr_url: str
+    start_commit: str
 
 
 # ---------------------------------------------------------------------------
@@ -208,6 +223,11 @@ class IssueToPr:
     ) -> None:
         _validate_remote_name(config.remote)
         _validate_branch_name("base_branch", config.base_branch)
+        _validate_branch_name("start_point", config.start_point)
+        try:
+            start_point = validate_start_point_request(config.start_point)
+        except WhError as exc:
+            raise IssueToPrError(Step.INIT, f"invalid start_point: {exc}") from exc
         _validate_path_segment("owner", config.owner)
         _validate_path_segment("repo", config.repo)
         if config.issue_number <= 0:
@@ -216,6 +236,7 @@ class IssueToPr:
                 f"issue_number must be a positive integer, got {config.issue_number}",
             )
         self._cfg = config
+        self._start_point = start_point
         self._wh = wh_client or WhClient()
         self._step = Step.INIT
 
@@ -234,7 +255,7 @@ class IssueToPr:
         branch_name = self._branch_name()
         worktree_path = self._worktree_path()
 
-        self._create_worktree(branch_name, worktree_path)
+        start_commit = self._create_worktree(branch_name, worktree_path)
         self._push_branch(branch_name, worktree_path)
         pr_number, pr_url = self._open_pr(branch_name)
 
@@ -243,113 +264,57 @@ class IssueToPr:
             worktree_path=worktree_path,
             pr_number=pr_number,
             pr_url=pr_url,
+            start_commit=start_commit,
         )
 
     # -- step implementations -----------------------------------------------
 
-    def _create_worktree(self, branch_name: str, worktree_path: str) -> None:
+    def _create_worktree(self, branch_name: str, worktree_path: str) -> str:
         """Ask ``wh`` to create an isolated worktree and branch.
 
-        Aligned with foundation clap shape::
+        The Rust boundary resolves ``start_point`` to a commit and creates the
+        missing branch at exactly that commit::
 
-            wh worktree create --repo <path> <owner> <repo_name> <job_id> <branch>
-
-        ``wh`` creates missing branches from HEAD only (no ``--base`` yet).
-        Always pre-create (or force-reset) ``branch_name`` from the resolved
-        ``base_branch`` so a dirty checkout HEAD cannot leak unrelated commits
-        into the PR, and stale ``feature/issue-N`` tips are rewritten.
+            wh worktree create --schema-version 2 --repo <path> \
+                --start-point <commit-or-ref> \
+                <owner> <repo_name> <job_id> <branch>
         """
         _validate_branch_name("branch", branch_name)
-        self._ensure_branch_from_base(branch_name)
         job_id = f"issue-{self._cfg.issue_number}"
+        request = WorktreeCreateRequest(
+            owner=self._cfg.owner,
+            repo=self._cfg.repo,
+            job_id=job_id,
+            branch=branch_name,
+            start_point=self._start_point,
+        )
         try:
-            resp = self._wh.run(
-                "worktree",
-                "create",
-                "--repo",
-                self._cfg.repo_path,
-                self._cfg.owner,
-                self._cfg.repo,
-                job_id,
-                branch_name,
-            )
+            resp = self._wh.run(*request.cli_args(self._cfg.repo_path))
         except WhError as exc:
             self._step = Step.FAILED
-            raise IssueToPrError(Step.INIT, str(exc)) from exc
+            raise IssueToPrError(Step.INIT, str(exc), data=getattr(exc, "data", None)) from exc
 
         if isinstance(resp, SuccessResponse):
+            try:
+                creation = parse_verified_worktree_creation(
+                    resp.data,
+                    requested_start_point=self._start_point,
+                    expected_path=worktree_path,
+                    expected_branch=branch_name,
+                )
+            except WhError as exc:
+                self._step = Step.FAILED
+                raise IssueToPrError(
+                    Step.INIT, f"invalid wh worktree.create response: {exc}"
+                ) from exc
             self._step = Step.WORKTREE_CREATED
-            # Prefer path from response when present; keep derived for callers.
-            _ = worktree_path
+            return creation.start_commit
         else:
             self._step = Step.FAILED
             raise IssueToPrError(
                 Step.INIT,
                 f"wh returned error: {resp.error.code}: {resp.error.message}",
-            )
-
-    def _git_ok(self, *args: str) -> subprocess.CompletedProcess[str]:
-        """Run ``git -C <repo_path> …`` and return the completed process."""
-        repo = self._cfg.repo_path
-        try:
-            return subprocess.run(
-                ["git", "-C", repo, *args],
-                capture_output=True,
-                text=True,
-                timeout=30,
-                check=False,
-            )
-        except subprocess.TimeoutExpired as exc:
-            self._step = Step.FAILED
-            raise IssueToPrError(Step.INIT, f"git timed out: {exc}") from exc
-        except FileNotFoundError as exc:
-            self._step = Step.FAILED
-            raise IssueToPrError(Step.INIT, f"git not found: {exc}") from exc
-        except PermissionError as exc:
-            self._step = Step.FAILED
-            raise IssueToPrError(Step.INIT, f"git not executable: {exc}") from exc
-
-    def _resolve_start_point(self, base: str) -> str:
-        """Resolve ``base`` to a local ref or ``{remote}/{base}`` start-point.
-
-        Prefer an existing local branch; fall back to the remote-tracking ref
-        so release bases that only exist as ``origin/release/…`` still work.
-        """
-        _validate_branch_name("base_branch", base)
-        local = self._git_ok("rev-parse", "--verify", "--quiet", f"refs/heads/{base}")
-        if local.returncode == 0:
-            return base
-        remote = self._cfg.remote
-        tracking = f"refs/remotes/{remote}/{base}"
-        remote_ok = self._git_ok("rev-parse", "--verify", "--quiet", tracking)
-        if remote_ok.returncode == 0:
-            return f"{remote}/{base}"
-        self._step = Step.FAILED
-        raise IssueToPrError(
-            Step.INIT,
-            f"base branch {base!r} not found as local ref or {remote}/{base}; "
-            f"fetch the remote or create the branch first",
-        )
-
-    def _ensure_branch_from_base(self, branch_name: str) -> None:
-        """Create or force-reset ``branch_name`` at the resolved base start-point.
-
-        Always runs (including default ``main``) so the feature tip matches
-        ``base_branch`` rather than whatever HEAD the orchestrator process
-        currently has. Stale ``feature/issue-N`` branches are rewritten with
-        ``git branch -f`` so a previous failed run cannot open a PR against
-        the wrong history.
-        """
-        _validate_branch_name("branch", branch_name)
-        start = self._resolve_start_point(self._cfg.base_branch)
-        # -f: create if missing, move if present (stale reclaim).
-        result = self._git_ok("branch", "-f", "--", branch_name, start)
-        if result.returncode != 0:
-            self._step = Step.FAILED
-            detail = result.stderr.strip() or result.stdout.strip() or "unknown error"
-            raise IssueToPrError(
-                Step.INIT,
-                f"could not create branch {branch_name!r} from {start!r}: {detail}",
+                data=resp.data,
             )
 
     def _push_branch(self, branch_name: str, worktree_path: str) -> None:

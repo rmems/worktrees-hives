@@ -17,7 +17,7 @@ Agent platform / SKILL.md
           | intent and operator context
           v
 Python orchestrator (worktrees_hives)
-          | wh subprocess calls + JSON envelope v1
+          | wh subprocess calls + versioned JSON envelope
           v
 Rust CLI (wh) / wh-core
           | allowlisted subprocess operations
@@ -35,7 +35,7 @@ git / gh / operating system
 
 **Why a hybrid?** Rust enforces safety-sensitive runtime mutation rules (no runtime merge path, force-with-lease, branch verification, path sandboxing) at the binary boundary where a malformed prompt or Python bug cannot bypass them. Python handles the orchestration logic that benefits from rapid iteration and rich ecosystem tooling. The agent skill layer remains portable across platforms.
 
-The Python/Rust boundary is CLI-first and uses versioned JSON instead of PyO3. The contract is versioned independently so Python and Rust can evolve without sharing an in-process ABI. The v1 contract is tracked in [GitHub #40](https://github.com/rmems/worktrees-hives/issues/40); its documentation will live at `docs/json-contract.md`.
+The Python/Rust boundary is CLI-first and uses versioned JSON instead of PyO3. The contract versions request grammar as well as response envelopes so Python and Rust can evolve without sharing an in-process ABI. Most commands remain on v1; exact-base `worktree.create` selects v2 explicitly. See [`docs/json-contract.md`](docs/json-contract.md).
 
 See [`AGENTS.md`](AGENTS.md) for detailed source ownership, data flow, and per-layer responsibilities.
 

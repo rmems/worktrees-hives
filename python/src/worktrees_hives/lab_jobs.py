@@ -41,10 +41,18 @@ from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from worktrees_hives.contract import ErrorResponse, SuccessResponse
+from worktrees_hives.contract import (
+    ErrorResponse,
+    SuccessResponse,
+    WorktreeCreateRequest,
+    parse_verified_worktree_creation,
+    validate_canonical_commit,
+    validate_start_point_request,
+)
 from worktrees_hives.errors import (
     PolicyError,
     WhBinaryNotFoundError,
+    WhContractVersionError,
     WhError,
     WhProcessError,
 )
@@ -67,6 +75,17 @@ _HYP_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
 class LabJobError(WhError):
     """Base error for lab job orchestration policy failures."""
+
+    def __init__(
+        self,
+        detail: str,
+        *,
+        code: str = "LAB_JOB_ERROR",
+        data: dict[str, object] | None = None,
+    ) -> None:
+        self.code = code
+        self.data = dict(data or {})
+        super().__init__(detail)
 
 
 class LabJobExistsError(LabJobError):
@@ -120,6 +139,10 @@ class LabJob:
     status: LabJobStatus
     created_at: str
     updated_at: str
+    # Requested commit/ref identity; absent in legacy v1 records.
+    start_point: str | None = None
+    # Exact commit resolved and verified by wh; absent in legacy v1 records.
+    start_commit: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize for JSON persistence."""
@@ -136,19 +159,11 @@ class LabJob:
         missing = _LAB_JOB_FIELDS - set(raw)
         if missing:
             raise LabJobError(f"job record missing fields: {sorted(missing)}")
-        role_raw = raw["role"]
-        status_raw = raw["status"]
-        try:
-            role = AgentRole(str(role_raw))
-        except ValueError as exc:
-            raise LabJobError(f"invalid role: {role_raw!r}") from exc
-        try:
-            status = LabJobStatus(str(status_raw))
-        except ValueError as exc:
-            raise LabJobError(f"invalid status: {status_raw!r}") from exc
-        wt = raw["worktree_path"]
-        if wt is not None and not isinstance(wt, str):
-            raise LabJobError("worktree_path must be a string or null")
+        role = _parse_stored_role(raw["role"])
+        status = _parse_stored_status(raw["status"])
+        wt = _parse_stored_worktree_path(raw["worktree_path"])
+        start_point = _parse_stored_start_point(raw.get("start_point"))
+        start_commit = _parse_stored_start_commit(raw.get("start_commit"))
         return cls(
             job_id=str(raw["job_id"]),
             hypothesis_id=str(raw["hypothesis_id"]),
@@ -161,7 +176,46 @@ class LabJob:
             status=status,
             created_at=str(raw["created_at"]),
             updated_at=str(raw["updated_at"]),
+            start_point=start_point,
+            start_commit=start_commit,
         )
+
+
+def _parse_stored_role(value: object) -> AgentRole:
+    try:
+        return AgentRole(str(value))
+    except ValueError as exc:
+        raise LabJobError(f"invalid role: {value!r}") from exc
+
+
+def _parse_stored_status(value: object) -> LabJobStatus:
+    try:
+        return LabJobStatus(str(value))
+    except ValueError as exc:
+        raise LabJobError(f"invalid status: {value!r}") from exc
+
+
+def _parse_stored_worktree_path(value: object) -> str | None:
+    if value is not None and not isinstance(value, str):
+        raise LabJobError("worktree_path must be a string or null")
+    return value
+
+
+def _parse_stored_start_point(value: object) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise LabJobError("start_point must be a string or null")
+    return _validate_start_point(value)
+
+
+def _parse_stored_start_commit(value: object) -> str | None:
+    if value is None:
+        return None
+    try:
+        return validate_canonical_commit(value, field_name="job record start_commit")
+    except WhError as exc:
+        raise LabJobError(str(exc)) from exc
 
 
 def _now_iso() -> str:
@@ -205,6 +259,23 @@ def _validate_ref(field_name: str, value: str) -> None:
         raise LabJobError(
             f"Invalid {field_name} {value!r}: must be a plain git ref, not empty or option-looking"
         )
+
+
+def _validate_start_point(value: str) -> str:
+    _validate_ref("start_point", value)
+    try:
+        return validate_start_point_request(value)
+    except WhError as exc:
+        raise LabJobError(f"invalid start_point: {exc}") from exc
+
+
+def _parse_agent_role(role: AgentRole | str) -> AgentRole:
+    if not isinstance(role, str):
+        return role
+    try:
+        return AgentRole(role)
+    except ValueError as exc:
+        raise LabJobError(f"invalid role: {role!r}") from exc
 
 
 def _validate_hypothesis_id(value: str) -> None:
@@ -460,6 +531,7 @@ class LabJobManager:
         *,
         owner: str,
         repo: str,
+        start_point: str,
         hypothesis_id: str,
         agent_id: str,
         role: AgentRole | str,
@@ -469,16 +541,12 @@ class LabJobManager:
         """Create a worktree via ``wh`` and register an allocated lab job."""
         _validate_segment("owner", owner)
         _validate_segment("repo", repo)
+        start_point = _validate_start_point(start_point)
         _validate_hypothesis_id(hypothesis_id)
         if not agent_id or not str(agent_id).strip():
             raise LabJobError("agent_id is required")
         self._assert_owner_allowed(owner)
-
-        if isinstance(role, str):
-            try:
-                role = AgentRole(role)
-            except ValueError as exc:
-                raise LabJobError(f"invalid role: {role!r}") from exc
+        role = _parse_agent_role(role)
 
         jid = job_id if job_id is not None else self._default_job_id(hypothesis_id)
         _validate_segment("job_id", jid)
@@ -496,27 +564,39 @@ class LabJobManager:
             owner=owner,
             repo=repo,
             branch=br,
-            worktree_path=None,
+            worktree_path=worktree_path,
             status=LabJobStatus.PENDING,
             created_at=now,
             updated_at=now,
+            start_point=start_point,
         )
         # Reserve job id before create so concurrent managers cannot collide.
         self.store.reserve_pending(pending)
+        return self._commit_allocation(pending, worktree_path, start_point)
 
+    def _commit_allocation(self, pending: LabJob, worktree_path: str, start_point: str) -> LabJob:
         path: str | None = None
         try:
             if Path(worktree_path).exists():
                 raise LabJobExistsError(f"worktree already exists for this job: {worktree_path}")
-            path, ret_branch = self._wh_create(owner, repo, jid, br)
-            if ret_branch != br:
-                raise LabJobError(f"wh returned branch {ret_branch!r}, expected {br!r}")
+            path, ret_branch, start_commit = self._wh_create(
+                WorktreeCreateRequest(
+                    owner=pending.owner,
+                    repo=pending.repo,
+                    job_id=pending.job_id,
+                    branch=pending.branch,
+                    start_point=start_point,
+                )
+            )
+            if ret_branch != pending.branch:
+                raise LabJobError(f"wh returned branch {ret_branch!r}, expected {pending.branch!r}")
             done = replace(
                 pending,
                 worktree_path=path,
                 branch=ret_branch,
                 status=LabJobStatus.ALLOCATED,
                 updated_at=_now_iso(),
+                start_commit=start_commit,
             )
             # Only promote if still PENDING — concurrent teardown must win.
             return self.store.commit_allocated(done)
@@ -524,7 +604,7 @@ class LabJobManager:
             if path is not None:
                 with contextlib.suppress(LabJobError):
                     self._wh_remove(path, force=True)
-            self.store.drop_if_pending(jid)
+            self.store.drop_if_pending(pending.job_id)
             raise
 
     def list_jobs(self, *, status: LabJobStatus | None = None) -> list[LabJob]:
@@ -568,26 +648,24 @@ class LabJobManager:
                 "LabJobManager(allowed_owners=...)."
             )
 
-    def _wh_create(self, owner: str, repo: str, job_id: str, branch: str) -> tuple[str, str]:
-        resp = self._wh_run(
-            "worktree",
-            "create",
-            "--repo",
-            self.repo_root,
-            owner,
-            repo,
-            job_id,
-            branch,
-        )
+    def _wh_create(self, request: WorktreeCreateRequest) -> tuple[str, str, str]:
+        resp = self._wh_run(*request.cli_args(self.repo_root))
         if not isinstance(resp, SuccessResponse):
-            raise LabJobError(f"wh worktree create failed: {resp.error.code}: {resp.error.message}")
-        path = resp.data.get("path")
-        ret_branch = resp.data.get("branch")
-        if not isinstance(path, str) or not path:
-            path = self.derive_path(owner, repo, job_id)
-        if not isinstance(ret_branch, str) or not ret_branch:
-            ret_branch = branch
-        return path, ret_branch
+            raise LabJobError(
+                f"wh worktree create failed: {resp.error.code}: {resp.error.message}",
+                code=resp.error.code,
+                data=resp.data,
+            )
+        try:
+            creation = parse_verified_worktree_creation(
+                resp.data,
+                requested_start_point=request.start_point,
+                expected_path=self.derive_path(request.owner, request.repo, request.job_id),
+                expected_branch=request.branch,
+            )
+        except WhError as exc:
+            raise LabJobError(f"invalid wh worktree.create response: {exc}") from exc
+        return creation.path, creation.branch, creation.start_commit
 
     def _wh_remove(self, path: str, *, force: bool) -> None:
         """Remove worktree; treat already-missing path as success for tombstones."""
@@ -618,6 +696,10 @@ class LabJobManager:
         except PolicyError:
             # Preserve structured policy + exit-code-2 semantics for the CLI.
             raise
+        except WhContractVersionError as exc:
+            # Must precede WhProcessError: the subclass is the stable
+            # CONTRACT_VERSION_UNSUPPORTED signal for a legacy `wh` binary.
+            raise LabJobError(str(exc), code=exc.code) from exc
         except WhProcessError as exc:
             raise LabJobError(f"wh exited {exc.returncode}: {exc.stderr or 'no stderr'}") from exc
         except WhError as exc:

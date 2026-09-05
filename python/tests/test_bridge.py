@@ -140,7 +140,7 @@ class TestResolveWhBinary:
 
 
 class TestResponseFromDict:
-    """Tests for v1 envelope schema validation."""
+    """Tests for supported boundary-envelope schema validation."""
 
     def _valid_envelope(self, **overrides):
         base = {
@@ -260,12 +260,13 @@ class TestClassify:
             ok=False,
             schema_version=1,
             command="cli.some_command",
-            data={},
+            data={"path": "/tmp/residual"},
             error=ErrorData(code="E001", message="bad"),
         )
         result = classify(resp)
         assert isinstance(result, ErrorResponse)
         assert result.error.code == "E001"
+        assert result.data == {"path": "/tmp/residual"}
 
 
 # ---------------------------------------------------------------------------
@@ -470,7 +471,7 @@ class TestPolicyExitCode:
                 "ok": False,
                 "schema_version": 1,
                 "command": "worktree.create",
-                "data": {},
+                "data": {"path": "/tmp/residual", "branch": "hive/gh-1"},
                 "error": {"code": "PathEscape", "message": "path outside sandbox"},
             }
         )
@@ -478,6 +479,10 @@ class TestPolicyExitCode:
         with pytest.raises(PolicyError, match="PathEscape") as exc_info:
             WhClient().run("worktree", "create")
         assert exc_info.value.code == "PathEscape"
+        assert exc_info.value.data == {
+            "path": "/tmp/residual",
+            "branch": "hive/gh-1",
+        }
 
     @patch("worktrees_hives.bridge.subprocess.run")
     @patch("worktrees_hives.bridge._resolve_wh_binary", return_value="/usr/bin/wh")

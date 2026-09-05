@@ -1,12 +1,36 @@
-# JSON Contract v1
+# JSON Contract v1 and exact-base v2
 
 This document describes the versioned JSON envelope used for communication between the Python orchestrator and the Rust `wh` CLI.
 
-The Rust `wh` envelope remains independently versioned at schema version 1. The Python `worktrees-hives` CLI envelopes and persisted watchlist are versioned separately at schema v2; see [Python watchlist and CLI schema v2](#python-watchlist-and-cli-schema-v2).
+The Rust `wh` envelope remains independently versioned at schema version 1 for
+bootstrap, status, state, safe Git/GitHub, supervisor, and non-create worktree
+commands. The Python `worktrees-hives` CLI envelopes and persisted watchlist are
+versioned separately at schema v2; see [Python watchlist and CLI schema v2](#python-watchlist-and-cli-schema-v2).
+
+## Boundary versions
+
+The outer `schema_version` versions the complete Python/Rust boundary: response
+envelopes, command names, required and optional request arguments, and error/exit
+semantics. It is not only a response-object version.
+
+- Version 1 remains the default for bootstrap, status, state, safe Git/GitHub,
+  supervisor, and non-create worktree commands.
+- `worktree.create` version 1 is now a fail-closed, non-mutating migration stub.
+  It returns `CONTRACT_UPGRADE_REQUIRED` instead of deriving a branch start from
+  the controller checkout's ambient `HEAD`.
+- `worktree.create` version 2 is selected explicitly with
+  `--schema-version 2`. It requires `--start-point`, resolves that input to a
+  canonical commit before mutation, and returns schema-version 2 success or
+  failure envelopes.
+
+The v1 migration stub has no scheduled removal. It remains supported until a
+future, separately announced boundary version defines its removal, so legacy
+machine callers retain a deterministic upgrade signal throughout the current
+0.x series. It never regains mutating behavior.
 
 ## Envelope Structure
 
-All `--json` responses follow this schema:
+After command-line parsing succeeds, all `--json` responses follow this schema:
 
 ```json
 {
@@ -23,7 +47,7 @@ All `--json` responses follow this schema:
 | Field | Type | Description |
 |-------|------|-------------|
 | `ok` | `boolean` | `true` for success, `false` for failure |
-| `schema_version` | `integer` | Always `1` for this version |
+| `schema_version` | `integer` | Selected boundary version (`1`, or `2` for exact-base `worktree.create`) |
 | `command` | `string` | Machine-readable command identifier (e.g., `worktree.create`, `state.add`) |
 | `data` | `object` | Command-specific payload (empty object `{}` on success for commands without output) |
 | `error` | `object \| null` | Present only when `ok: false` |
@@ -48,7 +72,30 @@ Standard error codes:
 - `WhBinaryNotFoundError` — `wh` binary not on PATH or `WH_BIN`
 - `WhProcessError` — `wh` exited with non-zero status
 - `WhJsonDecodeError` — Stdout was not valid JSON
-- `WhSchemaError` — JSON did not match v1 envelope
+- `WhSchemaError` — JSON did not match a supported v1/v2 envelope
+- `WORKTREE_RESUME_UNPROVEN` — An existing branch cannot be safely identified as this job
+- `WORKTREE_POSTCONDITION_FAILED` — The created worktree/ref/HEAD identity changed or disagreed
+- `WORKTREE_CREATE_FAILED` — Git creation failed and residual state is reported in the message
+- `CONTRACT_UPGRADE_REQUIRED` — A v1 `worktree.create` request reached the non-mutating migration stub
+- `START_POINT_REQUIRED` — A v2 `worktree.create` request omitted `--start-point`
+- `CONTRACT_VERSION_UNSUPPORTED` — Python selected v2 but an older binary could not parse that selector
+
+`--json` is normally a dispatched-command contract. Errors raised by the clap parser before
+dispatch (for example, a missing required argument, an unknown option, `--help`, or
+`--version`) remain clap's human-readable stderr output and exit code; they are not v1
+JSON envelopes. The `worktree.create` parser deliberately accepts a missing
+`--start-point` so both the legacy v1 request and the malformed v2 request reach
+dispatch and receive machine-readable errors without mutation. Once
+`worktree.create` dispatches, policy failures use exit code 2 and
+operational failures (including an invalid/unresolvable start point) use exit code 1,
+with an `ok:false` envelope on stdout.
+
+If Git may have left a branch or worktree registration behind, the failure
+envelope's additive `data` fields report `path`, `branch`, `path_exists`,
+`branch_commit`, `head_commit`, `worktree_registered`, and
+`cleanup_performed:false`. The operation deliberately does not delete residual
+state whose ownership could have been concurrently adopted; callers must stop
+and surface it for explicit reconciliation.
 
 ## Commands
 
@@ -73,28 +120,84 @@ wh --json
 
 #### `worktree.create`
 
-Create a new isolated worktree for a job.
+Create a new isolated worktree for a job using the exact-base v2 boundary.
+
+```bash
+wh --json worktree create --schema-version 2 --repo /path/to/repo --start-point origin/trunk acme example-repo wh-123 feature/fix
+```
+
+**Request parameters:** required `--schema-version 2`, `--repo`, and
+`--start-point <commit-or-ref>` flags plus
+positionals `<owner> <repo_name> <job_id> <branch>`. The start point is resolved to a
+commit before any mutation. Existing branches are rejected unless a future contract can
+prove a durable resume identity.
+
+The legacy v1 shape remains parseable solely for migration:
 
 ```bash
 wh --json worktree create --repo /path/to/repo acme example-repo wh-123 feature/fix
 ```
 
-**Request parameters:** `--repo` flag plus positionals `<owner> <repo_name> <job_id> <branch>`.
+It exits 1 without creating a path or branch and emits:
+
+```json
+{
+  "ok": false,
+  "schema_version": 1,
+  "command": "worktree.create",
+  "data": { "required_schema_version": 2 },
+  "error": {
+    "code": "CONTRACT_UPGRADE_REQUIRED",
+    "message": "worktree.create schema v1 is a non-mutating migration stub; retry with --schema-version 2 and an explicit --start-point"
+  }
+}
+```
 
 **Success response:**
 ```json
 {
   "ok": true,
-  "schema_version": 1,
+  "schema_version": 2,
   "command": "worktree.create",
   "data": {
     "path": "/home/user/.local/share/worktrees-hives/worktrees/acme/example-repo/wh-123",
     "branch": "feature/fix",
-    "repo_root": "/path/to/repo"
+    "branch_ref": "refs/heads/feature/fix",
+    "repo_root": "/path/to/repo",
+    "start_commit": "0123456789abcdef0123456789abcdef01234567",
+    "head_commit": "0123456789abcdef0123456789abcdef01234567",
+    "worktree_registered": true
   },
   "error": null
 }
 ```
+
+`start_commit` is the canonical commit to which the caller's start point resolved.
+`head_commit` is independently read from the completed worker and must equal
+`start_commit`. `branch_ref` is the verified full symbolic ref, and
+`worktree_registered:true` proves `git worktree list --porcelain` reported the same
+canonical path, branch ref, and HEAD. Python orchestration consumers require and
+re-verify all of these fields against their request. An all-hex caller start point must
+exactly equal the canonical resolved object id: 40 characters in a SHA-1 repository or
+64 characters in a SHA-256 repository. Uppercase full ids are accepted and
+canonicalized to lowercase. A 40-character prefix in a SHA-256 repository is rejected
+as abbreviated even when Git can resolve it uniquely; symbolic refs are resolved by
+Rust.
+
+### Mixed-version behavior
+
+- A legacy v1 client calling a v2-capable binary receives the schema-v1
+  `CONTRACT_UPGRADE_REQUIRED` envelope above. No branch or worktree is created.
+- A v2-capable Python client always includes `--schema-version 2` and
+  `--start-point`, accepts schema 1 and 2 envelopes, and requires the complete
+  verified v2 success identity.
+- If that client invokes a legacy v1 binary, the old binary rejects the unknown
+  selector before dispatch. `WhClient` converts that otherwise human-only
+  failure into `WhContractVersionError` with stable code
+  `CONTRACT_VERSION_UNSUPPORTED` and `requested_schema_version=2`.
+- A v2 request missing `--start-point` receives a schema-v2
+  `START_POINT_REQUIRED` error with exit 1 and no mutation. An invalid or
+  unresolvable start point receives the existing schema-v2 operational error.
 
 #### `worktree.list`
 
@@ -446,9 +549,14 @@ fixture models the four built-in v0 roles.
 ## Compatibility Policy
 
 - **Additive changes** (new optional fields in `data`, new commands) are compatible within v1.
-- **Breaking changes** (removing/renaming fields, changing types, removing commands) require a schema version bump to v2.
+- **Breaking changes** include removing or renaming fields, changing types or
+  meanings, removing commands, or adding a required request argument. They
+  require a new selected boundary version.
 - Consumers MUST ignore unknown fields in `data`.
 - Consumers MUST handle `error` being `null` or an object.
+- Exact-base `worktree.create` v2 fields are required by v2-capable Python
+  consumers even though a generic envelope parser continues to allow additive
+  data.
 
 This policy applies to the Rust `wh` envelope. It does not version the Python watchlist file or the Python `worktrees-hives` CLI envelopes; those use the separate v2 rules below.
 
@@ -519,6 +627,7 @@ Example JSON files for testing are located in `docs/examples/`:
 
 - `bootstrap.json`
 - `worktree-create.json`
+- `worktree-create-v1-upgrade-required.json`
 - `worktree-list.json`
 - `state-show.json` — Python `watchlist.list` schema v2 envelope (no retired babysit fields)
 - `state-add.json` — Python `watchlist.add` schema v2 envelope (no retired babysit fields)
@@ -529,14 +638,14 @@ Example JSON files for testing are located in `docs/examples/`:
 
 ## Python Validation
 
-The Python `worktrees_hives.contract` module provides `Response.from_dict()` for validation. It raises `WhSchemaError` if the envelope doesn't match v1.
+The Python `worktrees_hives.contract` module provides `Response.from_dict()` for validation. It accepts supported v1/v2 envelopes and raises `WhSchemaError` for malformed or unsupported versions.
 
 ```python
 from worktrees_hives.contract import Response, classify
 from worktrees_hives.errors import WhSchemaError
 
 raw = json.loads(stdout)
-response = Response.from_dict(raw)  # Validates schema
+response = Response.from_dict(raw)  # Validates supported boundary schemas
 typed = classify(response)  # SuccessResponse | ErrorResponse
 ```
 
