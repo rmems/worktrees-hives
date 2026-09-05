@@ -460,7 +460,7 @@ fn resolve_start_commit(repo_root: &Path, start_point: &str) -> Result<String> {
     let commit = peel_to_commit(repo_root, start_point)?;
     reject_empty_selector(
         &commit,
-        &format!("start point {start_point:?} resolved to an empty commit id"),
+        format!("start point {start_point:?} resolved to an empty commit id"),
     )?;
     reject_leading_hex_mismatch(start_point, &commit)?;
     Ok(commit)
@@ -1185,12 +1185,12 @@ mod tests {
             ],
         );
 
-        let result = verify_creation_postconditions(
-            &repo_root,
-            &wt.path,
-            "feature/postcondition",
-            &requested_commit,
-        );
+        let result = verify_creation_postconditions(CreationPostconditions {
+            repo_root: &repo_root,
+            worktree_path: &wt.path,
+            expected_branch: "feature/postcondition",
+            expected_commit: &requested_commit,
+        });
         assert!(matches!(result, Err(Error::WorktreePostconditionFailed(_))));
         assert_eq!(
             git_output(

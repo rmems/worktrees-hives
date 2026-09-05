@@ -135,19 +135,23 @@ fn assert_uncreated(root: &Path, repo: &Path, job: &str, branch: &str) {
     assert!(git(repo, &["branch", "--list", branch]).trim().is_empty());
 }
 
+struct RejectCase<'a> {
+    job: &'a str,
+    branch: &'a str,
+    exit: i32,
+    schema: u64,
+    code: &'a str,
+}
+
 fn reject_without_mutation(
     root: &Path,
     repo: &Path,
     create_args: &[&str],
-    job: &str,
-    branch: &str,
-    expected_exit: i32,
-    expected_schema: u64,
-    expected_code: &str,
+    case: RejectCase<'_>,
 ) -> serde_json::Value {
     let output = wh_cmd(root, create_args);
-    let envelope = assert_error_envelope(&output, expected_exit, expected_schema, expected_code);
-    assert_uncreated(root, repo, job, branch);
+    let envelope = assert_error_envelope(&output, case.exit, case.schema, case.code);
+    assert_uncreated(root, repo, case.job, case.branch);
     envelope
 }
 
@@ -165,11 +169,13 @@ fn legacy_v1_create_fails_with_machine_readable_upgrade_error_without_mutation()
             "legacy",
             "feature/legacy",
         ],
-        "legacy",
-        "feature/legacy",
-        1,
-        1,
-        "CONTRACT_UPGRADE_REQUIRED",
+        RejectCase {
+            job: "legacy",
+            branch: "feature/legacy",
+            exit: 1,
+            schema: 1,
+            code: "CONTRACT_UPGRADE_REQUIRED",
+        },
     );
     assert_eq!(envelope["data"]["required_schema_version"], 2);
 }
@@ -190,11 +196,13 @@ fn v2_create_without_start_point_fails_with_machine_readable_error_without_mutat
             "missing",
             "feature/missing",
         ],
-        "missing",
-        "feature/missing",
-        1,
-        2,
-        "START_POINT_REQUIRED",
+        RejectCase {
+            job: "missing",
+            branch: "feature/missing",
+            exit: 1,
+            schema: 2,
+            code: "START_POINT_REQUIRED",
+        },
     );
 }
 
