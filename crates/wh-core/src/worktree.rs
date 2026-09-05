@@ -80,6 +80,10 @@ impl WorktreeManager {
     /// `start_point` is required and is resolved to a commit before any branch
     /// mutation. Existing branches are rejected because the exact-base contract
     /// does not define a durable resume identity for an existing ref.
+    ///
+    /// This six-argument shape is a frozen compatibility wrapper. New callers
+    /// should use [`Self::create_with_request`] so identity fields stay packed.
+    // @codescene(disable:"String Heavy Function Arguments") Compatibility wrapper; do not unpack.
     pub fn create(
         &self,
         repo_root: &Path,
