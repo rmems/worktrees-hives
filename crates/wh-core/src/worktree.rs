@@ -456,13 +456,13 @@ fn reject_hex_oid_mismatch(start_point: &str, hex_prefix: &str, commit: &str) ->
 /// Resolve a caller-supplied commit-ish to one exact commit object.
 fn resolve_start_commit(repo_root: &Path, start_point: &str) -> Result<String> {
     reject_empty_selector(start_point, "start point must not be empty")?;
-    reject_abbreviated_leading_hex(start_point)?;
+    enforce_leading_hex_oid(start_point, None)?;
     let commit = peel_to_commit(repo_root, start_point)?;
     reject_empty_selector(
         &commit,
         format!("start point {start_point:?} resolved to an empty commit id"),
     )?;
-    reject_leading_hex_mismatch(start_point, &commit)?;
+    enforce_leading_hex_oid(start_point, Some(&commit))?;
     Ok(commit)
 }
 
@@ -476,16 +476,13 @@ fn reject_empty_selector(value: &str, stderr: impl Into<String>) -> Result<()> {
     Ok(())
 }
 
-fn reject_abbreviated_leading_hex(start_point: &str) -> Result<()> {
-    match leading_hex_oid_prefix(start_point) {
-        Some(hex_prefix) => reject_non_full_hex_oid(hex_prefix),
-        None => Ok(()),
-    }
-}
-
-fn reject_leading_hex_mismatch(start_point: &str, commit: &str) -> Result<()> {
-    match leading_hex_oid_prefix(start_point) {
-        Some(hex_prefix) => reject_hex_oid_mismatch(start_point, hex_prefix, commit),
+fn enforce_leading_hex_oid(start_point: &str, resolved: Option<&str>) -> Result<()> {
+    let Some(hex_prefix) = leading_hex_oid_prefix(start_point) else {
+        return Ok(());
+    };
+    reject_non_full_hex_oid(hex_prefix)?;
+    match resolved {
+        Some(commit) => reject_hex_oid_mismatch(start_point, hex_prefix, commit),
         None => Ok(()),
     }
 }
