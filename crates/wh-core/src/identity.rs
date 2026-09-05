@@ -122,17 +122,24 @@ fn reject_hex_oid_mismatch(
     hex_prefix: HexOidPrefix<'_>,
     commit: CommitId<'_>,
 ) -> Result<()> {
-    let prefix = hex_prefix.as_str();
-    let commit = commit.as_str();
-    if prefix.len() == commit.len() && commit.eq_ignore_ascii_case(prefix) {
+    if hex_oid_matches_commit(hex_prefix, commit) {
         return Ok(());
     }
     Err(rev_parse_error(format!(
         "all-hex start point must equal the full canonical object id; requested \
          {:?}, resolved {:?}",
         start_point.as_str(),
-        commit
+        commit.as_str()
     )))
+}
+
+fn hex_oid_matches_commit(hex_prefix: HexOidPrefix<'_>, commit: CommitId<'_>) -> bool {
+    let prefix = hex_prefix.as_str();
+    let commit = commit.as_str();
+    if prefix.len() != commit.len() {
+        return false;
+    }
+    commit.eq_ignore_ascii_case(prefix)
 }
 
 fn peel_to_commit(repo_root: &Path, start_point: StartPoint<'_>) -> Result<String> {
