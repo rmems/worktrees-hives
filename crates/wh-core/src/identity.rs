@@ -46,17 +46,19 @@ pub(crate) fn resolve_start_commit(
 
 fn reject_empty_start_point(start_point: StartPoint<'_>) -> Result<()> {
     if start_point.as_str().is_empty() {
-        return Err(rev_parse_error("start point must not be empty"));
+        return Err(rev_parse_error(GitErrorText(
+            "start point must not be empty".to_owned(),
+        )));
     }
     Ok(())
 }
 
 fn reject_empty_resolved_commit(start_point: StartPoint<'_>, commit: CommitId<'_>) -> Result<()> {
     if commit.as_str().is_empty() {
-        return Err(rev_parse_error(format!(
+        return Err(rev_parse_error(GitErrorText(format!(
             "start point {:?} resolved to an empty commit id",
             start_point.as_str()
-        )));
+        ))));
     }
     Ok(())
 }
@@ -86,16 +88,20 @@ fn leading_hex_oid_prefix(start_point: StartPoint<'_>) -> Option<HexOidPrefix<'_
     if hex_len == 0 {
         return None;
     }
-    if !hex_oid_rest_is_boundary(&text[hex_len..]) {
+    if !hex_oid_rest_is_boundary(SelectorSuffix(&text[hex_len..])) {
         return None;
     }
     Some(HexOidPrefix(&text[..hex_len]))
 }
 
+#[derive(Clone, Copy)]
+struct SelectorSuffix<'a>(&'a str);
+
 /// True when a leading hex run is a complete selector: bare, or immediately
 /// followed by a commit-ish decoration. Guard clauses keep the match set
 /// explicit without a compound boolean.
-fn hex_oid_rest_is_boundary(rest: &str) -> bool {
+fn hex_oid_rest_is_boundary(suffix: SelectorSuffix<'_>) -> bool {
+    let rest = suffix.0;
     if rest.is_empty() {
         return true;
     }
@@ -109,12 +115,16 @@ fn hex_oid_rest_is_boundary(rest: &str) -> bool {
 }
 
 fn reject_non_full_hex_oid(hex_prefix: HexOidPrefix<'_>) -> Result<()> {
-    if matches!(hex_prefix.as_str().len(), 40 | 64) {
+    let len = hex_prefix.as_str().len();
+    if len == 40 {
         return Ok(());
     }
-    Err(rev_parse_error(
-        "all-hex start point must be a full 40- or 64-character object id",
-    ))
+    if len == 64 {
+        return Ok(());
+    }
+    Err(rev_parse_error(GitErrorText(
+        "all-hex start point must be a full 40- or 64-character object id".to_owned(),
+    )))
 }
 
 fn reject_hex_oid_mismatch(
@@ -125,12 +135,12 @@ fn reject_hex_oid_mismatch(
     if hex_oid_matches_commit(hex_prefix, commit) {
         return Ok(());
     }
-    Err(rev_parse_error(format!(
+    Err(rev_parse_error(GitErrorText(format!(
         "all-hex start point must equal the full canonical object id; requested \
          {:?}, resolved {:?}",
         start_point.as_str(),
         commit.as_str()
-    )))
+    ))))
 }
 
 fn hex_oid_matches_commit(hex_prefix: HexOidPrefix<'_>, commit: CommitId<'_>) -> bool {
@@ -171,9 +181,11 @@ fn peel_to_commit(repo_root: &Path, start_point: StartPoint<'_>) -> Result<Strin
     })
 }
 
-fn rev_parse_error(stderr: impl Into<String>) -> Error {
+fn rev_parse_error(stderr: GitErrorText) -> Error {
     Error::GitCommand {
         args: vec!["rev-parse".into(), "--verify".into()],
-        stderr: stderr.into(),
+        stderr: stderr.0,
     }
 }
+
+struct GitErrorText(String);
