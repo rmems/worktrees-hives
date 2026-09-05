@@ -10,6 +10,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from worktrees_hives.contract import ErrorData, ErrorResponse, SuccessResponse
+from worktrees_hives.errors import WhContractVersionError
 from worktrees_hives.findings import AgentRole
 from worktrees_hives.lab_jobs import (
     LabJob,
@@ -257,6 +258,24 @@ class TestAllocate:
             role=AgentRole.AGENT,
         )
         assert job.start_commit == TEST_COMMIT
+
+    def test_legacy_binary_preserves_contract_version_code(self, tmp_path: Path) -> None:
+        mgr, wh, _ = _manager(tmp_path)
+        wh.run.side_effect = WhContractVersionError(
+            requested_schema_version=2,
+            returncode=2,
+            stderr="error: unexpected argument '--schema-version' found",
+        )
+        with pytest.raises(LabJobError) as exc_info:
+            mgr.allocate(
+                owner=TEST_OWNER,
+                repo=TEST_REPO,
+                start_point=TEST_COMMIT,
+                hypothesis_id="H-legacy",
+                agent_id="agent",
+                role=AgentRole.AGENT,
+            )
+        assert exc_info.value.code == "CONTRACT_VERSION_UNSUPPORTED"
 
     def test_rejects_abbreviated_sha_request(self, tmp_path: Path) -> None:
         mgr, wh, _ = _manager(tmp_path)

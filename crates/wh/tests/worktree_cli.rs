@@ -228,11 +228,23 @@ fn v2_success_reports_verified_path_ref_commit_and_registration_identity() {
     let envelope = json(&output);
 
     assert!(output.status.success());
+    // Match WorktreeManager::with_base: join each identity segment, then
+    // canonicalize so macOS /var vs /private/var and Windows 8.3 vs long-name
+    // spellings compare equal to the verified success payload.
+    let expected_path = wh_core::paths::canonicalize_for_tools(
+        &root
+            .0
+            .join("worktrees")
+            .join("acme")
+            .join("sample")
+            .join("success"),
+    )
+    .expect("created worktree path must exist and canonicalize");
     assert_eq!(
         serde_json::json!({
             "ok": true,
             "schema_version": 2,
-            "path": root.0.join("worktrees/acme/sample/success"),
+            "path": expected_path,
             "branch": "feature/success",
             "branch_ref": "refs/heads/feature/success",
             "repo_root": repo,

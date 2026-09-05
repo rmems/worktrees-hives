@@ -52,6 +52,7 @@ from worktrees_hives.contract import (
 from worktrees_hives.errors import (
     PolicyError,
     WhBinaryNotFoundError,
+    WhContractVersionError,
     WhError,
     WhProcessError,
 )
@@ -695,6 +696,10 @@ class LabJobManager:
         except PolicyError:
             # Preserve structured policy + exit-code-2 semantics for the CLI.
             raise
+        except WhContractVersionError as exc:
+            # Must precede WhProcessError: the subclass is the stable
+            # CONTRACT_VERSION_UNSUPPORTED signal for a legacy `wh` binary.
+            raise LabJobError(str(exc), code=exc.code) from exc
         except WhProcessError as exc:
             raise LabJobError(f"wh exited {exc.returncode}: {exc.stderr or 'no stderr'}") from exc
         except WhError as exc:
