@@ -48,32 +48,44 @@ fn init_repo(root: &Path) -> PathBuf {
     repo
 }
 
+fn primed() -> (TestDir, PathBuf) {
+    let root = TestDir::new();
+    let repo = init_repo(&root.0);
+    (root, repo)
+}
+
 struct CreateRequest<'a> {
     job: &'a str,
     branch: &'a str,
     start: &'a str,
 }
 
-fn wh_create(root: &Path, repo: &Path, request: CreateRequest<'_>) -> Output {
+fn wh_cmd(root: &Path, create_args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_wh"))
         .env("WH_WORKTREE_BASE", root.join("worktrees"))
-        .args([
-            "--json",
-            "worktree",
-            "create",
-            "--schema-version",
-            "2",
-            "--repo",
-            repo.to_str().unwrap(),
-            "--start-point",
-            request.start,
-            "acme",
-            "sample",
-            request.job,
-            request.branch,
-        ])
+        .args(["--json", "worktree", "create"])
+        .args(create_args)
         .output()
         .unwrap()
+}
+
+fn identity_args<'a>(repo: &'a Path, request: &CreateRequest<'a>) -> Vec<&'a str> {
+    vec![
+        "--schema-version",
+        "2",
+        "--repo",
+        repo.to_str().unwrap(),
+        "--start-point",
+        request.start,
+        "acme",
+        "sample",
+        request.job,
+        request.branch,
+    ]
+}
+
+fn wh_create(root: &Path, repo: &Path, request: CreateRequest<'_>) -> Output {
+    wh_cmd(root, &identity_args(repo, &request))
 }
 
 fn json(output: &Output) -> serde_json::Value {
@@ -111,46 +123,64 @@ fn assert_error_envelope(
     envelope
 }
 
+fn assert_uncreated(root: &Path, repo: &Path, job: &str, branch: &str) {
+    assert!(
+        !root
+            .join("worktrees")
+            .join("acme")
+            .join("sample")
+            .join(job)
+            .exists()
+    );
+    assert!(git(repo, &["branch", "--list", branch]).trim().is_empty());
+}
+
+fn reject_without_mutation(
+    root: &Path,
+    repo: &Path,
+    create_args: &[&str],
+    job: &str,
+    branch: &str,
+    expected_exit: i32,
+    expected_schema: u64,
+    expected_code: &str,
+) -> serde_json::Value {
+    let output = wh_cmd(root, create_args);
+    let envelope = assert_error_envelope(&output, expected_exit, expected_schema, expected_code);
+    assert_uncreated(root, repo, job, branch);
+    envelope
+}
+
 #[test]
 fn legacy_v1_create_fails_with_machine_readable_upgrade_error_without_mutation() {
-    let root = TestDir::new();
-    let repo = init_repo(&root.0);
-    let output = Command::new(env!("CARGO_BIN_EXE_wh"))
-        .env("WH_WORKTREE_BASE", root.0.join("worktrees"))
-        .args([
-            "--json",
-            "worktree",
-            "create",
+    let (root, repo) = primed();
+    let envelope = reject_without_mutation(
+        &root.0,
+        &repo,
+        &[
             "--repo",
             repo.to_str().unwrap(),
             "acme",
             "sample",
             "legacy",
             "feature/legacy",
-        ])
-        .output()
-        .unwrap();
-    let envelope = assert_error_envelope(&output, 1, 1, "CONTRACT_UPGRADE_REQUIRED");
-
-    assert_eq!(envelope["data"]["required_schema_version"], 2);
-    assert!(!root.0.join("worktrees/acme/sample/legacy").exists());
-    assert!(
-        git(&repo, &["branch", "--list", "feature/legacy"])
-            .trim()
-            .is_empty()
+        ],
+        "legacy",
+        "feature/legacy",
+        1,
+        1,
+        "CONTRACT_UPGRADE_REQUIRED",
     );
+    assert_eq!(envelope["data"]["required_schema_version"], 2);
 }
 
 #[test]
 fn v2_create_without_start_point_fails_with_machine_readable_error_without_mutation() {
-    let root = TestDir::new();
-    let repo = init_repo(&root.0);
-    let output = Command::new(env!("CARGO_BIN_EXE_wh"))
-        .env("WH_WORKTREE_BASE", root.0.join("worktrees"))
-        .args([
-            "--json",
-            "worktree",
-            "create",
+    let (root, repo) = primed();
+    reject_without_mutation(
+        &root.0,
+        &repo,
+        &[
             "--schema-version",
             "2",
             "--repo",
@@ -159,24 +189,18 @@ fn v2_create_without_start_point_fails_with_machine_readable_error_without_mutat
             "sample",
             "missing",
             "feature/missing",
-        ])
-        .output()
-        .unwrap();
-    assert_error_envelope(&output, 1, 2, "START_POINT_REQUIRED");
-
-    assert!(!root.0.join("worktrees/acme/sample/missing").exists());
-    assert!(
-        git(&repo, &["branch", "--list", "feature/missing"])
-            .trim()
-            .is_empty()
+        ],
+        "missing",
+        "feature/missing",
+        1,
+        2,
+        "START_POINT_REQUIRED",
     );
 }
 
 #[test]
 fn invalid_start_point_emits_v2_error_envelope_with_exit_1() {
-    let root = TestDir::new();
-    let repo = init_repo(&root.0);
-
+    let (root, repo) = primed();
     let output = wh_create(
         &root.0,
         &repo,
@@ -187,14 +211,12 @@ fn invalid_start_point_emits_v2_error_envelope_with_exit_1() {
         },
     );
     let envelope = assert_error_envelope(&output, 1, 2, "GIT_COMMAND_FAILED");
-
     assert_eq!(envelope["data"], serde_json::json!({}));
 }
 
 #[test]
 fn existing_branch_policy_emits_v2_error_envelope_with_exit_2() {
-    let root = TestDir::new();
-    let repo = init_repo(&root.0);
+    let (root, repo) = primed();
     let start = git(&repo, &["rev-parse", "HEAD"]);
     git(&repo, &["branch", "feature/existing", &start]);
 
@@ -212,10 +234,8 @@ fn existing_branch_policy_emits_v2_error_envelope_with_exit_2() {
 
 #[test]
 fn v2_success_reports_verified_path_ref_commit_and_registration_identity() {
-    let root = TestDir::new();
-    let repo = init_repo(&root.0);
+    let (root, repo) = primed();
     let start = git(&repo, &["rev-parse", "HEAD"]);
-
     let output = wh_create(
         &root.0,
         &repo,
@@ -268,8 +288,7 @@ fn v2_success_reports_verified_path_ref_commit_and_registration_identity() {
 
 #[test]
 fn partial_create_failure_reports_residual_state_without_deleting_branch() {
-    let root = TestDir::new();
-    let repo = init_repo(&root.0);
+    let (root, repo) = primed();
     let start = git(&repo, &["rev-parse", "HEAD"]);
     let target = root.0.join("worktrees/acme/sample/partial");
     fs::create_dir_all(&target).unwrap();

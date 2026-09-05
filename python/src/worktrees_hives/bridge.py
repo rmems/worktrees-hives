@@ -217,63 +217,10 @@ class WhClient:
         requested_schema_version: int | None = None,
     ) -> SuccessResponse | ErrorResponse:
         """Map process exit + stdout to a typed envelope or raise."""
-        stripped = stdout.strip()
-
-        if stripped:
-            try:
-                classified = self._parse(stdout)
-            except WhJsonDecodeError, WhSchemaError:
-                pass
-            else:
-                if (
-                    requested_schema_version is not None
-                    and classified.schema_version != requested_schema_version
-                ):
-                    raise WhContractVersionError(
-                        requested_schema_version=requested_schema_version,
-                        returncode=returncode,
-                        stderr=(
-                            stderr.strip()
-                            or "wh returned schema version "
-                            f"{classified.schema_version} for a version "
-                            f"{requested_schema_version} request"
-                        ),
-                    )
-                if isinstance(classified, ErrorResponse) and returncode == 2:
-                    raise PolicyError(
-                        classified.error.code,
-                        classified.error.message,
-                        data=classified.data,
-                    )
-                # Success envelope — including gh-safe/git-safe child failures
-                # where process exit mirrors data.exit_code but ok is true.
-                # ErrorResponse on non-2 exits is returned as structured data.
-                return classified
-
-        if (
-            returncode != 0
-            and requested_schema_version is not None
-            and _schema_selector_is_unsupported(stderr)
-        ):
-            raise WhContractVersionError(
-                requested_schema_version=requested_schema_version,
-                returncode=returncode,
-                stderr=stderr.strip(),
-            )
-
-        if returncode == 2:
-            # Policy path without a usable envelope (same as #57).
-            raise WhProcessError(
-                returncode=returncode,
-                stderr=stderr.strip(),
-            )
-
-        if returncode != 0:
-            raise WhProcessError(
-                returncode=returncode,
-                stderr=stderr.strip(),
-            )
-
+        classified = _classified_or_none(stdout)
+        if classified is not None:
+            return _accepted_envelope(classified, returncode, stderr, requested_schema_version)
+        _raise_unclassified_failure(returncode, stderr, requested_schema_version)
         return self._parse(stdout)
 
     @staticmethod
@@ -292,25 +239,104 @@ class WhClient:
         return classify(response)
 
 
+def _classified_or_none(stdout: str) -> SuccessResponse | ErrorResponse | None:
+    if not stdout.strip():
+        return None
+    try:
+        return WhClient._parse(stdout)
+    except WhJsonDecodeError, WhSchemaError:
+        return None
+
+
+def _accepted_envelope(
+    classified: SuccessResponse | ErrorResponse,
+    returncode: int,
+    stderr: str,
+    requested_schema_version: int | None,
+) -> SuccessResponse | ErrorResponse:
+    _reject_schema_mismatch(classified, returncode, stderr, requested_schema_version)
+    if isinstance(classified, ErrorResponse) and returncode == 2:
+        raise PolicyError(
+            classified.error.code,
+            classified.error.message,
+            data=classified.data,
+        )
+    # Success envelope — including gh-safe/git-safe child failures where
+    # process exit mirrors data.exit_code but ok is true. ErrorResponse on
+    # non-2 exits is returned as structured data.
+    return classified
+
+
+def _reject_schema_mismatch(
+    classified: SuccessResponse | ErrorResponse,
+    returncode: int,
+    stderr: str,
+    requested_schema_version: int | None,
+) -> None:
+    if requested_schema_version is None or classified.schema_version == requested_schema_version:
+        return
+    raise WhContractVersionError(
+        requested_schema_version=requested_schema_version,
+        returncode=returncode,
+        stderr=(
+            stderr.strip()
+            or "wh returned schema version "
+            f"{classified.schema_version} for a version "
+            f"{requested_schema_version} request"
+        ),
+    )
+
+
+def _raise_unclassified_failure(
+    returncode: int,
+    stderr: str,
+    requested_schema_version: int | None,
+) -> None:
+    if returncode == 0:
+        return
+    if requested_schema_version is not None and _schema_selector_is_unsupported(stderr):
+        raise WhContractVersionError(
+            requested_schema_version=requested_schema_version,
+            returncode=returncode,
+            stderr=stderr.strip(),
+        )
+    raise WhProcessError(returncode=returncode, stderr=stderr.strip())
+
+
 def _requested_schema_version(args: tuple[str, ...]) -> int | None:
     """Return the boundary selected by ``worktree create``, if present."""
     if args[:2] != ("worktree", "create"):
         return None
-    for index, arg in enumerate(args[2:], start=2):
+    return _create_schema_version(args[2:])
+
+
+def _create_schema_version(create_args: tuple[str, ...]) -> int | None:
+    for index, arg in enumerate(create_args):
         if arg == "--":
-            break
-        if arg == "--schema-version":
-            try:
-                return int(args[index + 1])
-            except ValueError, IndexError:
-                return None
-        if arg.startswith("--schema-version="):
-            _, _, value = arg.partition("=")
-            try:
-                return int(value)
-            except ValueError:
-                return None
+            return None
+        parsed = _schema_version_flag(arg, create_args[index + 1 :])
+        if parsed is not None:
+            return parsed[0]
     return None
+
+
+def _schema_version_flag(arg: str, remainder: tuple[str, ...]) -> tuple[int | None] | None:
+    """Return ``(version,)`` for a schema flag, else ``None`` if this is not one."""
+    if arg == "--schema-version":
+        raw = remainder[0] if remainder else None
+        return (_int_or_none(raw),)
+    if arg.startswith("--schema-version="):
+        return (_int_or_none(arg.partition("=")[2]),)
+    return None
+
+
+def _int_or_none(raw: str | None) -> int | None:
+    if raw is None:
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return None
 
 
 def _schema_selector_is_unsupported(stderr: str) -> bool:

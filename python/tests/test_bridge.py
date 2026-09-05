@@ -9,7 +9,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from worktrees_hives.bridge import WhClient, _resolve_wh_binary
+from worktrees_hives.bridge import (
+    WhClient,
+    _requested_schema_version,
+    _resolve_wh_binary,
+    _schema_selector_is_unsupported,
+)
 from worktrees_hives.contract import (
     ErrorResponse,
     Response,
@@ -472,6 +477,28 @@ class TestWhClientRun:
 
         assert not isinstance(exc_info.value, WhContractVersionError)
 
+    @patch("worktrees_hives.bridge.subprocess.run")
+    @patch("worktrees_hives.bridge._resolve_wh_binary", return_value="/usr/bin/wh")
+    def test_schema_selector_after_double_dash_does_not_select_boundary(
+        self, mock_resolve, mock_run
+    ):
+        mock_run.return_value = MagicMock(
+            returncode=0,
+            stdout=FAKE_SUCCESS_JSON,
+            stderr="",
+        )
+
+        result = WhClient().run(
+            "worktree",
+            "create",
+            "--",
+            "--schema-version",
+            "2",
+        )
+
+        assert isinstance(result, SuccessResponse)
+        assert result.schema_version == 1
+
     def test_worktree_create_request_selects_v2_boundary(self):
         request = WorktreeCreateRequest(
             owner="acme",
@@ -721,3 +748,38 @@ class TestPolicyExitCode:
         mock_run.return_value = MagicMock(returncode=2, stdout=envelope, stderr="policy")
         with pytest.raises(WhProcessError, match="exited with code 2"):
             WhClient().run("worktree", "create")
+
+
+class TestRequestedSchemaVersion:
+    """Direct coverage of schema-flag parsing helpers extracted from `_interpret`."""
+
+    def test_space_and_equals_selectors(self) -> None:
+        assert _requested_schema_version(("worktree", "create", "--schema-version", "2")) == 2
+        assert _requested_schema_version(("worktree", "create", "--schema-version=2")) == 2
+
+    def test_unrelated_commands_and_terminator_are_ignored(self) -> None:
+        assert _requested_schema_version(("supervisor", "run", "--schema-version", "2")) is None
+        assert _requested_schema_version(("git-safe", "show", "--schema-version", "2")) is None
+        assert _requested_schema_version(("gh-safe", "pr", "view", "--schema-version=2")) is None
+        assert (
+            _requested_schema_version(("worktree", "create", "--", "--schema-version", "2")) is None
+        )
+
+    def test_invalid_or_missing_values_are_none(self) -> None:
+        assert _requested_schema_version(("worktree", "create", "--schema-version")) is None
+        assert _requested_schema_version(("worktree", "create", "--schema-version", "x")) is None
+        assert _requested_schema_version(("worktree", "create", "--schema-version=")) is None
+
+    @pytest.mark.parametrize(
+        "stderr",
+        [
+            "error: unexpected argument '--schema-version' found",
+            "unknown argument: --schema-version",
+            "unrecognized option '--schema-version'",
+        ],
+    )
+    def test_legacy_clap_markers(self, stderr: str) -> None:
+        assert _schema_selector_is_unsupported(stderr)
+        assert not _schema_selector_is_unsupported(
+            "error: the following required arguments were not provided: --repo"
+        )

@@ -112,12 +112,12 @@ impl WorktreeManager {
         reject_unproven_resume(&request, &start_commit)?;
         add_worktree(&request, &worktree_path, &start_commit)?;
 
-        let head_commit = verify_creation_postconditions(
-            request.repo_root,
-            &worktree_path,
-            request.branch,
-            &start_commit,
-        )?;
+        let head_commit = verify_creation_postconditions(CreationPostconditions {
+            repo_root: request.repo_root,
+            worktree_path: &worktree_path,
+            expected_branch: request.branch,
+            expected_commit: &start_commit,
+        })?;
 
         Ok(Worktree {
             path: worktree_path,
@@ -455,16 +455,42 @@ fn reject_hex_oid_mismatch(start_point: &str, hex_prefix: &str, commit: &str) ->
 
 /// Resolve a caller-supplied commit-ish to one exact commit object.
 fn resolve_start_commit(repo_root: &Path, start_point: &str) -> Result<String> {
-    if start_point.is_empty() {
+    reject_empty_selector(start_point, "start point must not be empty")?;
+    reject_abbreviated_leading_hex(start_point)?;
+    let commit = peel_to_commit(repo_root, start_point)?;
+    reject_empty_selector(
+        &commit,
+        &format!("start point {start_point:?} resolved to an empty commit id"),
+    )?;
+    reject_leading_hex_mismatch(start_point, &commit)?;
+    Ok(commit)
+}
+
+fn reject_empty_selector(value: &str, stderr: impl Into<String>) -> Result<()> {
+    if value.is_empty() {
         return Err(Error::GitCommand {
             args: vec!["rev-parse".into(), "--verify".into()],
-            stderr: "start point must not be empty".into(),
+            stderr: stderr.into(),
         });
     }
-    if let Some(hex_prefix) = leading_hex_oid_prefix(start_point) {
-        reject_non_full_hex_oid(hex_prefix)?;
-    }
+    Ok(())
+}
 
+fn reject_abbreviated_leading_hex(start_point: &str) -> Result<()> {
+    match leading_hex_oid_prefix(start_point) {
+        Some(hex_prefix) => reject_non_full_hex_oid(hex_prefix),
+        None => Ok(()),
+    }
+}
+
+fn reject_leading_hex_mismatch(start_point: &str, commit: &str) -> Result<()> {
+    match leading_hex_oid_prefix(start_point) {
+        Some(hex_prefix) => reject_hex_oid_mismatch(start_point, hex_prefix, commit),
+        None => Ok(()),
+    }
+}
+
+fn peel_to_commit(repo_root: &Path, start_point: &str) -> Result<String> {
     let commitish = format!("{start_point}^{{commit}}");
     let output = Command::new("git")
         .arg("-C")
@@ -479,29 +505,18 @@ fn resolve_start_commit(repo_root: &Path, start_point: &str) -> Result<String> {
             source: e,
         })?;
 
-    if !output.status.success() {
-        return Err(Error::GitCommand {
-            args: vec![
-                "rev-parse".into(),
-                "--verify".into(),
-                "--end-of-options".into(),
-                commitish,
-            ],
-            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-        });
+    if output.status.success() {
+        return Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned());
     }
-
-    let commit = String::from_utf8_lossy(&output.stdout).trim().to_owned();
-    if commit.is_empty() {
-        return Err(Error::GitCommand {
-            args: vec!["rev-parse".into(), "--verify".into()],
-            stderr: format!("start point {start_point:?} resolved to an empty commit id"),
-        });
-    }
-    if let Some(hex_prefix) = leading_hex_oid_prefix(start_point) {
-        reject_hex_oid_mismatch(start_point, hex_prefix, &commit)?;
-    }
-    Ok(commit)
+    Err(Error::GitCommand {
+        args: vec![
+            "rev-parse".into(),
+            "--verify".into(),
+            "--end-of-options".into(),
+            commitish,
+        ],
+        stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+    })
 }
 
 struct CreationPostconditions<'a> {
@@ -607,18 +622,7 @@ impl CreationPostconditions<'_> {
     }
 }
 
-fn verify_creation_postconditions(
-    repo_root: &Path,
-    worktree_path: &Path,
-    expected_branch: &str,
-    expected_commit: &str,
-) -> Result<String> {
-    let postconditions = CreationPostconditions {
-        repo_root,
-        worktree_path,
-        expected_branch,
-        expected_commit,
-    };
+fn verify_creation_postconditions(postconditions: CreationPostconditions<'_>) -> Result<String> {
     let actual_branch_ref = postconditions.actual_branch_ref()?;
     let branch_commit = postconditions.branch_commit(&actual_branch_ref)?;
     let head_commit = postconditions.head_commit(&actual_branch_ref)?;
