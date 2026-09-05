@@ -852,10 +852,6 @@ mod tests {
     use std::fs;
     use tempfile::tempdir;
 
-    fn init_test_repo(dir: &Path) -> Result<PathBuf> {
-        init_test_repo_with_object_format(dir, None)
-    }
-
     fn init_test_repo_with_object_format(
         dir: &Path,
         object_format: Option<&str>,
@@ -939,52 +935,133 @@ mod tests {
         String::from_utf8(output.stdout).unwrap().trim().to_string()
     }
 
-    #[test]
-    fn create_and_list_worktree() {
-        let temp = tempdir().unwrap();
-        let repo = temp.path().join("repo");
-        fs::create_dir(&repo).unwrap();
-        let repo_root = init_test_repo(&repo).unwrap();
+    struct Harness {
+        temp: tempfile::TempDir,
+        repo_root: PathBuf,
+        manager: WorktreeManager,
+    }
 
-        let base = temp.path().join("worktrees");
-        let manager = WorktreeManager::with_base(base.clone()).unwrap();
+    impl Harness {
+        fn sha1() -> Self {
+            Self::with_format(None)
+        }
 
-        let start_commit = git_output(&repo_root, &["rev-parse", "HEAD"]);
+        fn sha256() -> Self {
+            Self::with_format(Some("sha256"))
+        }
 
-        // Create a worktree for a new branch
-        let wt = manager
-            .create_with_request(WorktreeCreateRequest {
-                repo_root: &repo_root,
+        fn with_format(object_format: Option<&str>) -> Self {
+            let temp = tempdir().unwrap();
+            let repo = temp.path().join("repo");
+            fs::create_dir(&repo).unwrap();
+            let repo_root = init_test_repo_with_object_format(&repo, object_format).unwrap();
+            let manager = WorktreeManager::with_base(temp.path().join("worktrees")).unwrap();
+            Self {
+                temp,
+                repo_root,
+                manager,
+            }
+        }
+
+        fn temp_path(&self) -> &Path {
+            self.temp.path()
+        }
+
+        fn head(&self) -> String {
+            git_output(&self.repo_root, &["rev-parse", "HEAD"])
+        }
+
+        fn request<'a>(
+            &'a self,
+            job_id: &'a str,
+            branch: &'a str,
+            start_point: &'a str,
+        ) -> WorktreeCreateRequest<'a> {
+            WorktreeCreateRequest {
+                repo_root: &self.repo_root,
                 owner: "acme",
                 repo: "test-repo",
-                job_id: "job-1",
-                branch: "feature/test",
-                start_point: &start_commit,
-            })
+                job_id,
+                branch,
+                start_point,
+            }
+        }
+
+        fn create<'a>(
+            &'a self,
+            job_id: &'a str,
+            branch: &'a str,
+            start_point: &'a str,
+        ) -> Result<Worktree> {
+            self.manager
+                .create_with_request(self.request(job_id, branch, start_point))
+        }
+
+        fn job_path(&self, job_id: &str) -> PathBuf {
+            self.manager
+                .base_path()
+                .unwrap()
+                .join("acme/test-repo")
+                .join(job_id)
+        }
+
+        fn git(&self, args: &[&str]) -> String {
+            git_output(&self.repo_root, args)
+        }
+
+        fn commit_file(&self, name: &str, contents: &str, message: &str) -> String {
+            fs::write(self.repo_root.join(name), contents).unwrap();
+            self.git(&["add", name]);
+            self.git(&["commit", "-m", message]);
+            self.head()
+        }
+    }
+
+    fn assert_create_rejects_start_point_without_mutation(
+        harness: &Harness,
+        start_point: &str,
+        job_id: &str,
+        branch: &str,
+    ) {
+        let expected_path = harness.job_path(job_id);
+        let result = harness.create(job_id, branch, start_point);
+        assert!(
+            matches!(result, Err(Error::GitCommand { .. })),
+            "expected GitCommand reject for {start_point:?}, got {result:?}"
+        );
+        assert!(
+            git_output(&harness.repo_root, &["branch", "--list", branch])
+                .trim()
+                .is_empty()
+        );
+        assert!(!expected_path.exists());
+    }
+
+    #[test]
+    fn create_and_list_worktree() {
+        let harness = Harness::sha1();
+        let start_commit = harness.head();
+        let wt = harness
+            .create("job-1", "feature/test", &start_commit)
             .unwrap();
 
         assert!(wt.path.exists());
         assert_eq!(wt.branch, "feature/test");
         assert_eq!(wt.start_commit.as_deref(), Some(start_commit.as_str()));
 
-        // List worktrees
-        let listed = manager.list().unwrap();
+        let listed = harness.manager.list().unwrap();
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].path, wt.path);
     }
 
     #[test]
     fn positional_create_api_remains_compatible() {
-        let temp = tempdir().unwrap();
-        let repo = temp.path().join("repo");
-        fs::create_dir(&repo).unwrap();
-        let repo_root = init_test_repo(&repo).unwrap();
-        let start_commit = git_output(&repo_root, &["rev-parse", "HEAD"]);
-        let manager = WorktreeManager::with_base(temp.path().join("worktrees")).unwrap();
-
-        let wt = manager
+        let harness = Harness::sha1();
+        let start_commit = harness.head();
+        let wt = harness
+            .manager
             .create(
-                &repo_root,
+                &harness.repo_root,
                 "acme",
                 "test-repo",
                 "job-positional",
@@ -996,36 +1073,7 @@ mod tests {
         assert_eq!(wt.head_commit.as_deref(), Some(start_commit.as_str()));
     }
 
-    #[test]
-    fn create_rejects_existing_branch_without_resume_identity() {
-        let temp = tempdir().unwrap();
-        let repo = temp.path().join("repo");
-        fs::create_dir(&repo).unwrap();
-        let repo_root = init_test_repo(&repo).unwrap();
-
-        // Create a branch in the repo
-        Command::new("git")
-            .arg("-C")
-            .arg(&repo_root)
-            .arg("branch")
-            .arg("existing-branch")
-            .output()
-            .unwrap();
-
-        let base = temp.path().join("worktrees");
-        let manager = WorktreeManager::with_base(base).unwrap();
-
-        let start_commit = git_output(&repo_root, &["rev-parse", "HEAD"]);
-
-        let result = manager.create_with_request(WorktreeCreateRequest {
-            repo_root: &repo_root,
-            owner: "acme",
-            repo: "test-repo",
-            job_id: "job-2",
-            branch: "existing-branch",
-            start_point: &start_commit,
-        });
-
+    fn assert_unproven_resume(result: Result<Worktree>) {
         assert!(matches!(
             result,
             Err(Error::PolicyViolation {
@@ -1033,53 +1081,34 @@ mod tests {
                 ..
             })
         ));
-        assert!(
-            !manager
-                .base_path()
-                .unwrap()
-                .join("acme/test-repo/job-2")
-                .exists()
-        );
+    }
+
+    #[test]
+    fn create_rejects_existing_branch_without_resume_identity() {
+        let harness = Harness::sha1();
+        let start_commit = harness.head();
+        harness.git(&["branch", "existing-branch"]);
+        let result = harness.create("job-2", "existing-branch", &start_commit);
+        assert_unproven_resume(result);
+        assert!(!harness.job_path("job-2").exists());
     }
 
     #[test]
     fn create_rejects_branch_checked_out_in_another_worktree() {
-        let temp = tempdir().unwrap();
-        let repo = temp.path().join("repo");
-        fs::create_dir(&repo).unwrap();
-        let repo_root = init_test_repo(&repo).unwrap();
-        let start_commit = git_output(&repo_root, &["rev-parse", "HEAD"]);
-        let other = temp.path().join("other-worktree");
-        git_output(
-            &repo_root,
-            &[
-                "worktree",
-                "add",
-                "-b",
-                "feature/elsewhere",
-                "--",
-                other.to_str().unwrap(),
-                &start_commit,
-            ],
-        );
-        let manager = WorktreeManager::with_base(temp.path().join("worktrees")).unwrap();
-
-        let result = manager.create_with_request(WorktreeCreateRequest {
-            repo_root: &repo_root,
-            owner: "acme",
-            repo: "test-repo",
-            job_id: "job-elsewhere",
-            branch: "feature/elsewhere",
-            start_point: &start_commit,
-        });
-
-        assert!(matches!(
-            result,
-            Err(Error::PolicyViolation {
-                code: PolicyCode::WorktreeResumeUnproven,
-                ..
-            })
-        ));
+        let harness = Harness::sha1();
+        let start_commit = harness.head();
+        let other = harness.temp_path().join("other-worktree");
+        harness.git(&[
+            "worktree",
+            "add",
+            "-b",
+            "feature/elsewhere",
+            "--",
+            other.to_str().unwrap(),
+            &start_commit,
+        ]);
+        let result = harness.create("job-elsewhere", "feature/elsewhere", &start_commit);
+        assert_unproven_resume(result);
         assert_eq!(
             git_output(&other, &["rev-parse", "HEAD"]),
             start_commit,
@@ -1089,30 +1118,14 @@ mod tests {
 
     #[test]
     fn create_uses_resolved_start_commit_not_ambient_head() {
-        let temp = tempdir().unwrap();
-        let repo = temp.path().join("repo");
-        fs::create_dir(&repo).unwrap();
-        let repo_root = init_test_repo(&repo).unwrap();
-        let requested_commit = git_output(&repo_root, &["rev-parse", "HEAD"]);
-
-        fs::write(repo_root.join("later.txt"), "ambient head only\n").unwrap();
-        git_output(&repo_root, &["add", "later.txt"]);
-        git_output(&repo_root, &["commit", "-m", "advance ambient HEAD"]);
-        let ambient_head = git_output(&repo_root, &["rev-parse", "HEAD"]);
+        let harness = Harness::sha1();
+        let requested_commit = harness.head();
+        let ambient_head =
+            harness.commit_file("later.txt", "ambient head only\n", "advance ambient HEAD");
         assert_ne!(requested_commit, ambient_head);
-
-        let manager = WorktreeManager::with_base(temp.path().join("worktrees")).unwrap();
-        let wt = manager
-            .create_with_request(WorktreeCreateRequest {
-                repo_root: &repo_root,
-                owner: "acme",
-                repo: "test-repo",
-                job_id: "job-exact",
-                branch: "feature/exact",
-                start_point: &requested_commit,
-            })
+        let wt = harness
+            .create("job-exact", "feature/exact", &requested_commit)
             .unwrap();
-
         assert_eq!(wt.start_commit.as_deref(), Some(requested_commit.as_str()));
         assert_eq!(wt.head_commit.as_deref(), Some(requested_commit.as_str()));
         assert_eq!(
@@ -1124,25 +1137,12 @@ mod tests {
 
     #[test]
     fn create_verifies_full_branch_ref_when_same_named_tag_exists() {
-        let temp = tempdir().unwrap();
-        let repo = temp.path().join("repo");
-        fs::create_dir(&repo).unwrap();
-        let repo_root = init_test_repo(&repo).unwrap();
-        let requested_commit = git_output(&repo_root, &["rev-parse", "HEAD"]);
-        git_output(&repo_root, &["tag", "feature/collision", &requested_commit]);
-
-        let manager = WorktreeManager::with_base(temp.path().join("worktrees")).unwrap();
-        let wt = manager
-            .create_with_request(WorktreeCreateRequest {
-                repo_root: &repo_root,
-                owner: "acme",
-                repo: "test-repo",
-                job_id: "job-collision",
-                branch: "feature/collision",
-                start_point: &requested_commit,
-            })
+        let harness = Harness::sha1();
+        let requested_commit = harness.head();
+        harness.git(&["tag", "feature/collision", &requested_commit]);
+        let wt = harness
+            .create("job-collision", "feature/collision", &requested_commit)
             .unwrap();
-
         assert_eq!(
             git_output(&wt.path, &["symbolic-ref", "--quiet", "HEAD"]),
             "refs/heads/feature/collision"
@@ -1152,48 +1152,30 @@ mod tests {
 
     #[test]
     fn postconditions_reject_moved_branch_and_preserve_residual_state() {
-        let temp = tempdir().unwrap();
-        let repo = temp.path().join("repo");
-        fs::create_dir(&repo).unwrap();
-        let repo_root = init_test_repo(&repo).unwrap();
-        let requested_commit = git_output(&repo_root, &["rev-parse", "HEAD"]);
-        let manager = WorktreeManager::with_base(temp.path().join("worktrees")).unwrap();
-        let wt = manager
-            .create_with_request(WorktreeCreateRequest {
-                repo_root: &repo_root,
-                owner: "acme",
-                repo: "test-repo",
-                job_id: "job-postcondition",
-                branch: "feature/postcondition",
-                start_point: &requested_commit,
-            })
+        let harness = Harness::sha1();
+        let requested_commit = harness.head();
+        let wt = harness
+            .create(
+                "job-postcondition",
+                "feature/postcondition",
+                &requested_commit,
+            )
             .unwrap();
-
-        fs::write(repo_root.join("moved.txt"), "moved\n").unwrap();
-        git_output(&repo_root, &["add", "moved.txt"]);
-        git_output(&repo_root, &["commit", "-m", "moved branch target"]);
-        let moved_commit = git_output(&repo_root, &["rev-parse", "HEAD"]);
-        git_output(
-            &repo_root,
-            &[
-                "update-ref",
-                "refs/heads/feature/postcondition",
-                &moved_commit,
-            ],
-        );
-
+        let moved_commit = harness.commit_file("moved.txt", "moved\n", "moved branch target");
+        harness.git(&[
+            "update-ref",
+            "refs/heads/feature/postcondition",
+            &moved_commit,
+        ]);
         let result = verify_creation_postconditions(CreationPostconditions {
-            repo_root: &repo_root,
+            repo_root: &harness.repo_root,
             worktree_path: &wt.path,
             expected_branch: "feature/postcondition",
             expected_commit: &requested_commit,
         });
         assert!(matches!(result, Err(Error::WorktreePostconditionFailed(_))));
         assert_eq!(
-            git_output(
-                &repo_root,
-                &["rev-parse", "refs/heads/feature/postcondition"]
-            ),
+            harness.git(&["rev-parse", "refs/heads/feature/postcondition"]),
             moved_commit
         );
         assert!(wt.path.exists());
@@ -1226,25 +1208,16 @@ mod tests {
 
     #[test]
     fn create_rejects_invalid_start_point_without_creating_branch() {
-        let temp = tempdir().unwrap();
-        let repo = temp.path().join("repo");
-        fs::create_dir(&repo).unwrap();
-        let repo_root = init_test_repo(&repo).unwrap();
-        let manager = WorktreeManager::with_base(temp.path().join("worktrees")).unwrap();
-
-        let result = manager.create_with_request(WorktreeCreateRequest {
-            repo_root: &repo_root,
-            owner: "acme",
-            repo: "test-repo",
-            job_id: "job-invalid",
-            branch: "feature/invalid",
-            start_point: "refs/heads/does-not-exist",
-        });
-
-        assert!(matches!(result, Err(Error::GitCommand { .. })));
+        let harness = Harness::sha1();
+        assert_create_rejects_start_point_without_mutation(
+            &harness,
+            "refs/heads/does-not-exist",
+            "job-invalid",
+            "feature/invalid",
+        );
         let branch_check = Command::new("git")
             .arg("-C")
-            .arg(&repo_root)
+            .arg(&harness.repo_root)
             .args([
                 "show-ref",
                 "--verify",
@@ -1258,57 +1231,23 @@ mod tests {
 
     #[test]
     fn create_rejects_abbreviated_all_hex_start_point_without_mutation() {
-        let temp = tempdir().unwrap();
-        let repo = temp.path().join("repo");
-        fs::create_dir(&repo).unwrap();
-        let repo_root = init_test_repo(&repo).unwrap();
-        let full_commit = git_output(&repo_root, &["rev-parse", "HEAD"]);
-        let abbreviated = &full_commit[..12];
-        let manager = WorktreeManager::with_base(temp.path().join("worktrees")).unwrap();
-
-        let result = manager.create_with_request(WorktreeCreateRequest {
-            repo_root: &repo_root,
-            owner: "acme",
-            repo: "test-repo",
-            job_id: "job-abbreviated",
-            branch: "feature/abbreviated",
-            start_point: abbreviated,
-        });
-
-        assert!(matches!(result, Err(Error::GitCommand { .. })));
-        assert!(
-            git_output(&repo_root, &["branch", "--list", "feature/abbreviated"])
-                .trim()
-                .is_empty()
-        );
-        assert!(
-            !manager
-                .base_path()
-                .unwrap()
-                .join("acme/test-repo/job-abbreviated")
-                .exists()
+        let harness = Harness::sha1();
+        let abbreviated = harness.head()[..12].to_owned();
+        assert_create_rejects_start_point_without_mutation(
+            &harness,
+            &abbreviated,
+            "job-abbreviated",
+            "feature/abbreviated",
         );
     }
 
     #[test]
     fn create_accepts_uppercase_full_object_id_and_returns_canonical_lowercase() {
-        let temp = tempdir().unwrap();
-        let repo = temp.path().join("repo");
-        fs::create_dir(&repo).unwrap();
-        let repo_root = init_test_repo(&repo).unwrap();
-        let full_commit = git_output(&repo_root, &["rev-parse", "HEAD"]);
+        let harness = Harness::sha1();
+        let full_commit = harness.head();
         let uppercase_commit = full_commit.to_ascii_uppercase();
-        let manager = WorktreeManager::with_base(temp.path().join("worktrees")).unwrap();
-
-        let wt = manager
-            .create_with_request(WorktreeCreateRequest {
-                repo_root: &repo_root,
-                owner: "acme",
-                repo: "test-repo",
-                job_id: "job-uppercase",
-                branch: "feature/uppercase",
-                start_point: &uppercase_commit,
-            })
+        let wt = harness
+            .create("job-uppercase", "feature/uppercase", &uppercase_commit)
             .unwrap();
 
         assert_eq!(wt.start_commit.as_deref(), Some(full_commit.as_str()));
@@ -1317,24 +1256,16 @@ mod tests {
 
     #[test]
     fn create_accepts_uppercase_full_sha256_and_returns_canonical_lowercase() {
-        let temp = tempdir().unwrap();
-        let repo = temp.path().join("repo");
-        fs::create_dir(&repo).unwrap();
-        let repo_root = init_test_repo_with_object_format(&repo, Some("sha256")).unwrap();
-        let full_commit = git_output(&repo_root, &["rev-parse", "HEAD"]);
+        let harness = Harness::sha256();
+        let full_commit = harness.head();
         assert_eq!(full_commit.len(), 64);
         let uppercase_commit = full_commit.to_ascii_uppercase();
-        let manager = WorktreeManager::with_base(temp.path().join("worktrees")).unwrap();
-
-        let wt = manager
-            .create_with_request(WorktreeCreateRequest {
-                repo_root: &repo_root,
-                owner: "acme",
-                repo: "test-repo",
-                job_id: "job-uppercase-sha256",
-                branch: "feature/uppercase-sha256",
-                start_point: &uppercase_commit,
-            })
+        let wt = harness
+            .create(
+                "job-uppercase-sha256",
+                "feature/uppercase-sha256",
+                &uppercase_commit,
+            )
             .unwrap();
 
         assert_eq!(wt.start_commit.as_deref(), Some(full_commit.as_str()));
@@ -1343,81 +1274,27 @@ mod tests {
 
     #[test]
     fn create_rejects_sha256_prefix_with_sha1_width_without_mutation() {
-        let temp = tempdir().unwrap();
-        let repo = temp.path().join("repo");
-        fs::create_dir(&repo).unwrap();
-        let repo_root = init_test_repo_with_object_format(&repo, Some("sha256")).unwrap();
-        let full_commit = git_output(&repo_root, &["rev-parse", "HEAD"]);
+        let harness = Harness::sha256();
+        let full_commit = harness.head();
         assert_eq!(full_commit.len(), 64);
-        let abbreviated = &full_commit[..40];
-        let manager = WorktreeManager::with_base(temp.path().join("worktrees")).unwrap();
-        let expected_path = manager
-            .base_path()
-            .unwrap()
-            .join("acme/test-repo/job-sha256-prefix");
-
-        let result = manager.create_with_request(WorktreeCreateRequest {
-            repo_root: &repo_root,
-            owner: "acme",
-            repo: "test-repo",
-            job_id: "job-sha256-prefix",
-            branch: "feature/sha256-prefix",
-            start_point: abbreviated,
-        });
-
-        assert!(matches!(result, Err(Error::GitCommand { .. })));
-        assert!(
-            git_output(&repo_root, &["branch", "--list", "feature/sha256-prefix"])
-                .trim()
-                .is_empty()
+        let abbreviated = full_commit[..40].to_owned();
+        let expected_path = harness.job_path("job-sha256-prefix");
+        assert_create_rejects_start_point_without_mutation(
+            &harness,
+            &abbreviated,
+            "job-sha256-prefix",
+            "feature/sha256-prefix",
         );
-        assert!(!expected_path.exists());
         assert!(
-            !git_output(&repo_root, &["worktree", "list", "--porcelain"])
+            !git_output(&harness.repo_root, &["worktree", "list", "--porcelain"])
                 .contains(&expected_path.to_string_lossy().to_string())
         );
     }
 
-    fn assert_create_rejects_start_point_without_mutation(
-        manager: &WorktreeManager,
-        repo_root: &Path,
-        start_point: &str,
-        job_id: &str,
-        branch: &str,
-    ) {
-        let expected_path = manager
-            .base_path()
-            .unwrap()
-            .join(format!("acme/test-repo/{job_id}"));
-        let result = manager.create_with_request(WorktreeCreateRequest {
-            repo_root,
-            owner: "acme",
-            repo: "test-repo",
-            job_id,
-            branch,
-            start_point,
-        });
-        assert!(
-            matches!(result, Err(Error::GitCommand { .. })),
-            "expected GitCommand reject for {start_point:?}, got {result:?}"
-        );
-        assert!(
-            git_output(repo_root, &["branch", "--list", branch])
-                .trim()
-                .is_empty()
-        );
-        assert!(!expected_path.exists());
-    }
-
     #[test]
     fn create_rejects_decorated_abbreviated_hex_start_points_without_mutation() {
-        let temp = tempdir().unwrap();
-        let repo = temp.path().join("repo");
-        fs::create_dir(&repo).unwrap();
-        let repo_root = init_test_repo(&repo).unwrap();
-        let full_commit = git_output(&repo_root, &["rev-parse", "HEAD"]);
-        let abbreviated = &full_commit[..12];
-        let manager = WorktreeManager::with_base(temp.path().join("worktrees")).unwrap();
+        let harness = Harness::sha1();
+        let abbreviated = harness.head()[..12].to_owned();
 
         for (suffix, job_id, branch) in [
             ("~0", "job-abbrev-tilde", "feature/abbrev-tilde"),
@@ -1426,8 +1303,7 @@ mod tests {
         ] {
             let start_point = format!("{abbreviated}{suffix}");
             assert_create_rejects_start_point_without_mutation(
-                &manager,
-                &repo_root,
+                &harness,
                 &start_point,
                 job_id,
                 branch,
@@ -1437,18 +1313,12 @@ mod tests {
 
     #[test]
     fn create_rejects_sha256_prefix_with_tilde_zero_without_mutation() {
-        let temp = tempdir().unwrap();
-        let repo = temp.path().join("repo");
-        fs::create_dir(&repo).unwrap();
-        let repo_root = init_test_repo_with_object_format(&repo, Some("sha256")).unwrap();
-        let full_commit = git_output(&repo_root, &["rev-parse", "HEAD"]);
+        let harness = Harness::sha256();
+        let full_commit = harness.head();
         assert_eq!(full_commit.len(), 64);
         let decorated = format!("{}~0", &full_commit[..40]);
-        let manager = WorktreeManager::with_base(temp.path().join("worktrees")).unwrap();
-
         assert_create_rejects_start_point_without_mutation(
-            &manager,
-            &repo_root,
+            &harness,
             &decorated,
             "job-sha256-prefix-tilde",
             "feature/sha256-prefix-tilde",
@@ -1457,62 +1327,28 @@ mod tests {
 
     #[test]
     fn create_accepts_symbolic_ref_and_full_object_id() {
-        let temp = tempdir().unwrap();
-        let repo = temp.path().join("repo");
-        fs::create_dir(&repo).unwrap();
-        let repo_root = init_test_repo(&repo).unwrap();
-        let full_commit = git_output(&repo_root, &["rev-parse", "HEAD"]);
-        let manager = WorktreeManager::with_base(temp.path().join("worktrees")).unwrap();
-
-        let from_ref = manager
-            .create_with_request(WorktreeCreateRequest {
-                repo_root: &repo_root,
-                owner: "acme",
-                repo: "test-repo",
-                job_id: "job-symbolic",
-                branch: "feature/symbolic",
-                start_point: "refs/heads/main",
-            })
+        let harness = Harness::sha1();
+        let full_commit = harness.head();
+        let from_ref = harness
+            .create("job-symbolic", "feature/symbolic", "refs/heads/main")
             .unwrap();
         assert_eq!(from_ref.start_commit.as_deref(), Some(full_commit.as_str()));
 
-        let from_oid = manager
-            .create_with_request(WorktreeCreateRequest {
-                repo_root: &repo_root,
-                owner: "acme",
-                repo: "test-repo",
-                job_id: "job-full-oid",
-                branch: "feature/full-oid",
-                start_point: &full_commit,
-            })
+        let from_oid = harness
+            .create("job-full-oid", "feature/full-oid", &full_commit)
             .unwrap();
         assert_eq!(from_oid.start_commit.as_deref(), Some(full_commit.as_str()));
     }
 
     #[test]
     fn create_failure_reports_and_preserves_residual_branch() {
-        let temp = tempdir().unwrap();
-        let repo = temp.path().join("repo");
-        fs::create_dir(&repo).unwrap();
-        let repo_root = init_test_repo(&repo).unwrap();
-        let start_commit = git_output(&repo_root, &["rev-parse", "HEAD"]);
-        let manager = WorktreeManager::with_base(temp.path().join("worktrees")).unwrap();
-        let target = manager
-            .base_path()
-            .unwrap()
-            .join("acme/test-repo/job-collision");
+        let harness = Harness::sha1();
+        let start_commit = harness.head();
+        let target = harness.job_path("job-collision");
         fs::create_dir_all(&target).unwrap();
         fs::write(target.join("occupied"), "force worktree add failure\n").unwrap();
 
-        let result = manager.create_with_request(WorktreeCreateRequest {
-            repo_root: &repo_root,
-            owner: "acme",
-            repo: "test-repo",
-            job_id: "job-collision",
-            branch: "feature/rollback",
-            start_point: &start_commit,
-        });
-
+        let result = harness.create("job-collision", "feature/rollback", &start_commit);
         assert!(
             matches!(
                 result,
@@ -1523,19 +1359,17 @@ mod tests {
             "unexpected result: {result:?}"
         );
         assert_eq!(
-            git_output(&repo_root, &["rev-parse", "refs/heads/feature/rollback"]),
+            harness.git(&["rev-parse", "refs/heads/feature/rollback"]),
             start_commit
         );
-        fs::write(repo_root.join("adopted.txt"), "adopted after failure\n").unwrap();
-        git_output(&repo_root, &["add", "adopted.txt"]);
-        git_output(&repo_root, &["commit", "-m", "adopt residual branch"]);
-        let adopted_commit = git_output(&repo_root, &["rev-parse", "HEAD"]);
-        git_output(
-            &repo_root,
-            &["update-ref", "refs/heads/feature/rollback", &adopted_commit],
+        let adopted_commit = harness.commit_file(
+            "adopted.txt",
+            "adopted after failure\n",
+            "adopt residual branch",
         );
+        harness.git(&["update-ref", "refs/heads/feature/rollback", &adopted_commit]);
         assert_eq!(
-            git_output(&repo_root, &["rev-parse", "refs/heads/feature/rollback"]),
+            harness.git(&["rev-parse", "refs/heads/feature/rollback"]),
             adopted_commit,
             "no delayed cleanup may delete a residual branch adopted after failure"
         );
@@ -1547,100 +1381,40 @@ mod tests {
 
     #[test]
     fn remove_worktree() {
-        let temp = tempdir().unwrap();
-        let repo = temp.path().join("repo");
-        fs::create_dir(&repo).unwrap();
-        let repo_root = init_test_repo(&repo).unwrap();
-
-        let base = temp.path().join("worktrees");
-        let manager = WorktreeManager::with_base(base.clone()).unwrap();
-
-        let start_commit = git_output(&repo_root, &["rev-parse", "HEAD"]);
-
-        let wt = manager
-            .create_with_request(WorktreeCreateRequest {
-                repo_root: &repo_root,
-                owner: "acme",
-                repo: "test-repo",
-                job_id: "job-3",
-                branch: "feature/remove",
-                start_point: &start_commit,
-            })
+        let harness = Harness::sha1();
+        let start_commit = harness.head();
+        let wt = harness
+            .create("job-3", "feature/remove", &start_commit)
             .unwrap();
-
         assert!(wt.path.exists());
-
-        manager.remove(&wt.path, false).unwrap();
-
+        harness.manager.remove(&wt.path, false).unwrap();
         assert!(!wt.path.exists());
     }
 
     #[test]
     fn reject_path_outside_sandbox() {
-        let temp = tempdir().unwrap();
-        let repo = temp.path().join("repo");
-        fs::create_dir(&repo).unwrap();
-        let repo_root = init_test_repo(&repo).unwrap();
-
-        let base = temp.path().join("worktrees");
-        let manager = WorktreeManager::with_base(base).unwrap();
-
-        // Try to create a worktree with path traversal in job_id
-        let result = manager.create_with_request(WorktreeCreateRequest {
-            repo_root: &repo_root,
-            owner: "acme",
-            repo: "test-repo",
-            job_id: "../escape",
-            branch: "branch",
-            start_point: "HEAD",
-        });
+        let harness = Harness::sha1();
+        let result = harness.create("../escape", "branch", "HEAD");
         assert!(result.is_err());
     }
 
     #[test]
     fn prune_worktrees() {
-        let temp = tempdir().unwrap();
-        let repo = temp.path().join("repo");
-        fs::create_dir(&repo).unwrap();
-        let repo_root = init_test_repo(&repo).unwrap();
-
-        let base = temp.path().join("worktrees");
-        let manager = WorktreeManager::with_base(base).unwrap();
-
-        let start_commit = git_output(&repo_root, &["rev-parse", "HEAD"]);
-
-        let wt = manager
-            .create_with_request(WorktreeCreateRequest {
-                repo_root: &repo_root,
-                owner: "acme",
-                repo: "test-repo",
-                job_id: "job-4",
-                branch: "feature/prune",
-                start_point: &start_commit,
-            })
+        let harness = Harness::sha1();
+        let start_commit = harness.head();
+        let wt = harness
+            .create("job-4", "feature/prune", &start_commit)
             .unwrap();
-
-        // Remove the worktree directory manually (simulating stale state)
         fs::remove_dir_all(&wt.path).unwrap();
-
-        // Prune should clean up the git worktree admin files
-        manager.prune(&repo_root).unwrap();
+        harness.manager.prune(&harness.repo_root).unwrap();
     }
 
     #[test]
     fn reject_symlink_owner_under_base() {
-        let temp = tempdir().unwrap();
-        let repo = temp.path().join("repo");
-        fs::create_dir(&repo).unwrap();
-        let repo_root = init_test_repo(&repo).unwrap();
-
-        let base = temp.path().join("worktrees");
-        let outside = temp.path().join("outside");
+        let harness = Harness::sha1();
+        let outside = harness.temp_path().join("outside");
         fs::create_dir_all(&outside).unwrap();
-        let manager = WorktreeManager::with_base(base.clone()).unwrap();
-
-        // Pre-create owner segment as a symlink that escapes the base.
-        let owner_link = manager.base_path().unwrap().join("acme");
+        let owner_link = harness.manager.base_path().unwrap().join("acme");
         #[cfg(unix)]
         {
             std::os::unix::fs::symlink(&outside, &owner_link).unwrap();
@@ -1650,14 +1424,7 @@ mod tests {
             std::os::windows::fs::symlink_dir(&outside, &owner_link).unwrap();
         }
 
-        let result = manager.create_with_request(WorktreeCreateRequest {
-            repo_root: &repo_root,
-            owner: "acme",
-            repo: "test-repo",
-            job_id: "job-sym",
-            branch: "branch-sym",
-            start_point: "HEAD",
-        });
+        let result = harness.create("job-sym", "branch-sym", "HEAD");
         assert!(
             matches!(result, Err(Error::SandboxViolation { .. })),
             "expected SandboxViolation, got {result:?}"
