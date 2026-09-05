@@ -14,7 +14,8 @@ SUPPORTED_SCHEMA_VERSIONS: frozenset[int] = frozenset({SCHEMA_VERSION, EXACT_BAS
 
 _CANONICAL_COMMIT_RE = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
 _FULL_COMMIT_REQUEST_RE = re.compile(r"^(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})$")
-_HEX_START_POINT_RE = re.compile(r"^[0-9a-fA-F]+$")
+_LEADING_HEX_RE = re.compile(r"^[0-9a-fA-F]+")
+_COMMITISH_DECORATION_RE = re.compile(r"^(?:~|\^|@\{)")
 
 
 def validate_canonical_commit(value: object, *, field_name: str) -> str:
@@ -28,18 +29,37 @@ def validate_canonical_commit(value: object, *, field_name: str) -> str:
     return value
 
 
+def _leading_hex_oid_prefix(start_point: str) -> str | None:
+    """Return a leading hex OID when it is bare or commit-ish-decorated.
+
+    Decorations are ``~``, ``^``, and ``@{``. Symbolic refs such as
+    ``refs/heads/x`` or ``develop~1`` do not match and are left to Git.
+    """
+    match = _LEADING_HEX_RE.match(start_point)
+    if match is None:
+        return None
+    hex_prefix = match.group(0)
+    rest = start_point[len(hex_prefix) :]
+    if rest == "" or _COMMITISH_DECORATION_RE.match(rest):
+        return hex_prefix
+    return None
+
+
 def validate_start_point_request(start_point: str) -> str:
     """Return a normalized start point, rejecting ambiguous object ids.
 
     A caller-supplied all-hex value is interpreted as an object id and must be
-    a full SHA-1 or SHA-256 id. Full ids are normalized to lowercase; symbolic
+    a full SHA-1 or SHA-256 id. The same rule applies when an abbreviated hex
+    OID is smuggled behind a commit-ish decoration (``~0``, ``^0``,
+    ``^{commit}``, ``@{0}``). Full ids are normalized to lowercase; symbolic
     refs are returned unchanged and resolved by the Rust boundary.
     """
     from worktrees_hives.errors import WhSchemaError
 
     if _FULL_COMMIT_REQUEST_RE.fullmatch(start_point):
         return start_point.lower()
-    if _HEX_START_POINT_RE.fullmatch(start_point):
+    hex_prefix = _leading_hex_oid_prefix(start_point)
+    if hex_prefix is not None and len(hex_prefix) not in (40, 64):
         raise WhSchemaError("all-hex start_point must be a full 40- or 64-character object id")
     return start_point
 
@@ -120,6 +140,24 @@ def _required_nonempty_string(value: object, *, field_name: str) -> str:
     return value
 
 
+def _path_has_non_canonical_component(path: str) -> bool:
+    return any(part in (".", "..") for part in Path(path).parts)
+
+
+def _verified_paths_equal(actual: str, expected: str) -> bool:
+    """Compare Git-verified path strings without accepting ``..`` spellings.
+
+    Exact string equality matches Rust registration checks. When neither side
+    contains ``.`` / ``..`` components, ``Path.resolve()`` still accepts OS
+    aliases such as macOS ``/var`` versus ``/private/var``.
+    """
+    if actual == expected:
+        return True
+    if _path_has_non_canonical_component(actual) or _path_has_non_canonical_component(expected):
+        return False
+    return Path(actual).resolve() == Path(expected).resolve()
+
+
 def parse_verified_worktree_creation(
     data: dict[str, Any],
     *,
@@ -139,7 +177,7 @@ def parse_verified_worktree_creation(
         data.get("branch_ref"), field_name="worktree.create data.branch_ref"
     )
     expected_branch_ref = f"refs/heads/{expected_branch}"
-    if Path(path).resolve() != Path(expected_path).resolve():
+    if not _verified_paths_equal(path, expected_path):
         raise WhSchemaError("worktree.create path does not equal the expected worktree path")
     if branch != expected_branch or branch_ref != expected_branch_ref:
         raise WhSchemaError("worktree.create branch identity does not equal the request")

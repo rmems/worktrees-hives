@@ -405,6 +405,54 @@ fn branch_exists_in_repo(repo_root: &Path, branch: &str) -> Result<bool> {
     }
 }
 
+/// Leading all-hex object-id text when it is the entire start point or is
+/// immediately followed by a commit-ish decoration (`~`, `^`, `@{`).
+///
+/// This closes abbreviated-OID smuggling such as `<abbrev>~0` while leaving
+/// symbolic refs (`refs/heads/x`, `develop~1`, tags) untouched.
+fn leading_hex_oid_prefix(start_point: &str) -> Option<&str> {
+    let hex_len = start_point
+        .bytes()
+        .take_while(u8::is_ascii_hexdigit)
+        .count();
+    if hex_len == 0 {
+        return None;
+    }
+    let rest = &start_point[hex_len..];
+    if rest.is_empty() || is_commitish_decoration(rest) {
+        Some(&start_point[..hex_len])
+    } else {
+        None
+    }
+}
+
+fn is_commitish_decoration(rest: &str) -> bool {
+    rest.starts_with('~') || rest.starts_with('^') || rest.starts_with("@{")
+}
+
+fn reject_non_full_hex_oid(hex_prefix: &str) -> Result<()> {
+    if matches!(hex_prefix.len(), 40 | 64) {
+        return Ok(());
+    }
+    Err(Error::GitCommand {
+        args: vec!["rev-parse".into(), "--verify".into()],
+        stderr: "all-hex start point must be a full 40- or 64-character object id".into(),
+    })
+}
+
+fn reject_hex_oid_mismatch(start_point: &str, hex_prefix: &str, commit: &str) -> Result<()> {
+    if hex_prefix.len() == commit.len() && commit.eq_ignore_ascii_case(hex_prefix) {
+        return Ok(());
+    }
+    Err(Error::GitCommand {
+        args: vec!["rev-parse".into(), "--verify".into()],
+        stderr: format!(
+            "all-hex start point must equal the full canonical object id; requested \
+             {start_point:?}, resolved {commit:?}"
+        ),
+    })
+}
+
 /// Resolve a caller-supplied commit-ish to one exact commit object.
 fn resolve_start_commit(repo_root: &Path, start_point: &str) -> Result<String> {
     if start_point.is_empty() {
@@ -413,14 +461,8 @@ fn resolve_start_commit(repo_root: &Path, start_point: &str) -> Result<String> {
             stderr: "start point must not be empty".into(),
         });
     }
-    let is_all_hex = start_point
-        .chars()
-        .all(|character| character.is_ascii_hexdigit());
-    if is_all_hex && !matches!(start_point.len(), 40 | 64) {
-        return Err(Error::GitCommand {
-            args: vec!["rev-parse".into(), "--verify".into()],
-            stderr: "all-hex start point must be a full 40- or 64-character object id".into(),
-        });
+    if let Some(hex_prefix) = leading_hex_oid_prefix(start_point) {
+        reject_non_full_hex_oid(hex_prefix)?;
     }
 
     let commitish = format!("{start_point}^{{commit}}");
@@ -456,19 +498,8 @@ fn resolve_start_commit(repo_root: &Path, start_point: &str) -> Result<String> {
             stderr: format!("start point {start_point:?} resolved to an empty commit id"),
         });
     }
-    if is_all_hex && !commit.eq_ignore_ascii_case(start_point) {
-        return Err(Error::GitCommand {
-            args: vec![
-                "rev-parse".into(),
-                "--verify".into(),
-                "--end-of-options".into(),
-                commitish,
-            ],
-            stderr: format!(
-                "all-hex start point must equal the full canonical object id; requested \
-                 {start_point:?}, resolved {commit:?}"
-            ),
-        });
+    if let Some(hex_prefix) = leading_hex_oid_prefix(start_point) {
+        reject_hex_oid_mismatch(start_point, hex_prefix, &commit)?;
     }
     Ok(commit)
 }
@@ -1344,6 +1375,117 @@ mod tests {
             !git_output(&repo_root, &["worktree", "list", "--porcelain"])
                 .contains(&expected_path.to_string_lossy().to_string())
         );
+    }
+
+    fn assert_create_rejects_start_point_without_mutation(
+        manager: &WorktreeManager,
+        repo_root: &Path,
+        start_point: &str,
+        job_id: &str,
+        branch: &str,
+    ) {
+        let expected_path = manager
+            .base_path()
+            .unwrap()
+            .join(format!("acme/test-repo/{job_id}"));
+        let result = manager.create_with_request(WorktreeCreateRequest {
+            repo_root,
+            owner: "acme",
+            repo: "test-repo",
+            job_id,
+            branch,
+            start_point,
+        });
+        assert!(
+            matches!(result, Err(Error::GitCommand { .. })),
+            "expected GitCommand reject for {start_point:?}, got {result:?}"
+        );
+        assert!(
+            git_output(repo_root, &["branch", "--list", branch])
+                .trim()
+                .is_empty()
+        );
+        assert!(!expected_path.exists());
+    }
+
+    #[test]
+    fn create_rejects_decorated_abbreviated_hex_start_points_without_mutation() {
+        let temp = tempdir().unwrap();
+        let repo = temp.path().join("repo");
+        fs::create_dir(&repo).unwrap();
+        let repo_root = init_test_repo(&repo).unwrap();
+        let full_commit = git_output(&repo_root, &["rev-parse", "HEAD"]);
+        let abbreviated = &full_commit[..12];
+        let manager = WorktreeManager::with_base(temp.path().join("worktrees")).unwrap();
+
+        for (suffix, job_id, branch) in [
+            ("~0", "job-abbrev-tilde", "feature/abbrev-tilde"),
+            ("^0", "job-abbrev-caret", "feature/abbrev-caret"),
+            ("^{commit}", "job-abbrev-peel", "feature/abbrev-peel"),
+        ] {
+            let start_point = format!("{abbreviated}{suffix}");
+            assert_create_rejects_start_point_without_mutation(
+                &manager,
+                &repo_root,
+                &start_point,
+                job_id,
+                branch,
+            );
+        }
+    }
+
+    #[test]
+    fn create_rejects_sha256_prefix_with_tilde_zero_without_mutation() {
+        let temp = tempdir().unwrap();
+        let repo = temp.path().join("repo");
+        fs::create_dir(&repo).unwrap();
+        let repo_root = init_test_repo_with_object_format(&repo, Some("sha256")).unwrap();
+        let full_commit = git_output(&repo_root, &["rev-parse", "HEAD"]);
+        assert_eq!(full_commit.len(), 64);
+        let decorated = format!("{}~0", &full_commit[..40]);
+        let manager = WorktreeManager::with_base(temp.path().join("worktrees")).unwrap();
+
+        assert_create_rejects_start_point_without_mutation(
+            &manager,
+            &repo_root,
+            &decorated,
+            "job-sha256-prefix-tilde",
+            "feature/sha256-prefix-tilde",
+        );
+    }
+
+    #[test]
+    fn create_accepts_symbolic_ref_and_full_object_id() {
+        let temp = tempdir().unwrap();
+        let repo = temp.path().join("repo");
+        fs::create_dir(&repo).unwrap();
+        let repo_root = init_test_repo(&repo).unwrap();
+        let full_commit = git_output(&repo_root, &["rev-parse", "HEAD"]);
+        let manager = WorktreeManager::with_base(temp.path().join("worktrees")).unwrap();
+
+        let from_ref = manager
+            .create_with_request(WorktreeCreateRequest {
+                repo_root: &repo_root,
+                owner: "acme",
+                repo: "test-repo",
+                job_id: "job-symbolic",
+                branch: "feature/symbolic",
+                start_point: "refs/heads/main",
+            })
+            .unwrap();
+        assert_eq!(from_ref.start_commit.as_deref(), Some(full_commit.as_str()));
+
+        let from_oid = manager
+            .create_with_request(WorktreeCreateRequest {
+                repo_root: &repo_root,
+                owner: "acme",
+                repo: "test-repo",
+                job_id: "job-full-oid",
+                branch: "feature/full-oid",
+                start_point: &full_commit,
+            })
+            .unwrap();
+        assert_eq!(from_oid.start_commit.as_deref(), Some(full_commit.as_str()));
     }
 
     #[test]
