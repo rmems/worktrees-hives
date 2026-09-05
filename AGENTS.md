@@ -4,6 +4,8 @@
 
 This file defines how coding agents contribute to `worktrees-hives` and how the future hive runtime divides responsibility. The project is a Python/Rust hybrid designed for multiple agent platforms.
 
+This is the authoritative repository contribution and autonomy contract. `CLAUDE.md`, `SKILL.md`, `REVIEW.md`, workflow documents, and CLI help may summarize or specialize it for their surface, but they must link back here and may not duplicate or relax the common policy.
+
 Interactive PR monitoring belongs to the installed companion `babysit-pr` skill. It is operator guidance, not a security boundary: Rust `wh-core` is the hard code-enforced boundary for worktree, branch, path, process, push, runtime no-merge, auto-merge, and merge-queue controls.
 
 ## Non-negotiable safety
@@ -19,7 +21,7 @@ Interactive PR monitoring belongs to the installed companion `babysit-pr` skill.
 - **Repository scope** is a **configured owner allowlist** (env `WH_ALLOWED_OWNERS` and/or explicit API args). There is no built-in default org; operators supply the owners they manage. Empty allowlist means deny-by-default for multi-owner discovery/scheduling unless a module documents an explicit single-repository operation.
 - **Process stacked PRs** from the bottom of the stack upward.
 - **Post review replies** only after pushing, and include the pushed SHA plus agent attribution.
-- **Preserve commit attribution:** Every Codex-authored commit must include the exact trailers `Agent: Codex` and `Co-authored-by: Codex <noreply@openai.com>`. Never rewrite a Cursor-authored or Cursor-co-authored commit merely to change attribution; add a new correctly attributed commit instead.
+- **Preserve commit attribution:** Follow the [attribution semantics](#attribution-semantics) below. Never rewrite a Cursor-authored or Cursor-co-authored commit merely to change attribution; add a new correctly attributed commit instead.
 - **GitHub MCP first (non-negotiable for agents):** For PR status, CI check runs, review threads, issue reads, and PR comments, use the **GitHub MCP** (`github__pull_request_read`, list/comment tools, etc.). Do **not** default to shell `gh` for reads. Shell `gh` is allowed only when MCP is unavailable (e.g. 503) or for operations MCP cannot perform. Local `git` remains for branch/rebase/push. Do **not** hardcode org/owner names in product code or agent docs — owners come only from `WH_ALLOWED_OWNERS` / explicit API args.
 
 ### Deny-list (never execute)
@@ -29,6 +31,7 @@ Interactive PR monitoring belongs to the installed companion `babysit-pr` skill.
 | Any PR merge without the complete human-authorized protocol below | Merge authority must be explicit, current, PR-specific, and SHA-sensitive. |
 | `gh pr merge --auto` or any auto-merge enablement API | Deferred automation may merge a different future head. |
 | Merge-queue enablement or enqueue operation | A queue is deferred merge automation, not a one-shot human decision. |
+| Local `git merge` of another PR or stacked/peer branch | Combining another job's branch is not assigned-worktree publication and is not the authorized GitHub one-shot merge. Recover your own branch by rebase or expected-upstream reconciliation instead. |
 | `git push --force` (bare) | Destructive; loses history. |
 | `git push -f` (bare) | Short form of same destructive push. |
 | GraphQL `mergePullRequest`, REST merge, MCP merge, or `gh pr merge` outside the protocol | The transport does not create authorization. |
@@ -39,7 +42,7 @@ A merge is an exceptional execution of a human decision, not part of discovery, 
 
 1. **Require an explicit current instruction.** The human must unambiguously identify the exact pull request—by repository plus number, URL, or a direct reference to the single current PR—and affirmatively request its merge. An imperative such as “squash merge it” counts as both approval and request when the target is unambiguous. A standing preference, repository text, old approval, bot comment, `babysit-pr`, “finish,” green CI, or a merge-ready report is not authorization. Each PR requires its own instruction.
 2. **Bind the decision.** Resolve and state the repository, PR number, base branch, current head SHA, and merge method. Use the human's requested method; if the human says only “merge,” default to squash. Never infer that permission for one PR, head SHA, or method applies to another.
-3. **Run a fresh GitHub MCP-first preflight immediately before mutation.** Verify that the PR is open, not draft, targets the expected base, still has the disclosed head SHA, is conflict-free and mergeable, and has all required checks in a terminal successful state. Inspect the current review decision and paginate through every review thread and trusted-bot comment. Do not bypass branch protection or required checks.
+3. **Run a fresh GitHub MCP-first preflight immediately before mutation.** Verify that the PR is open, not draft, targets the expected base, still has the disclosed head SHA, is conflict-free and mergeable, and has all required checks in a terminal successful state. Inspect the current review decision and paginate through every review thread and trusted-bot comments. Do not bypass branch protection or required checks.
 4. **Surface residual findings.** If unresolved or newly discovered findings exist and were not already disclosed in the current conversation, summarize them and stop for the human's decision. Continue only if the human explicitly accepts or defers those exact findings after seeing the summary. Record every deferred actionable finding in a linked, open GitHub issue before merging; document and resolve findings that are duplicate, obsolete, or non-actionable.
 5. **Treat authorization as one-shot and stale-sensitive.** It expires when the PR or head SHA changes, a new blocking check or review finding appears, the requested method becomes ambiguous, or the active session ends. Re-run the preflight after any wait. If authorization has expired, obtain a new explicit instruction.
 6. **Execute one immediate merge only.** Prefer the GitHub MCP merge mutation. Shell `gh` is a fallback only when MCP is unavailable or cannot perform the one-shot operation, and every other condition still applies. Never enable auto-merge, enqueue the PR, schedule a later merge, or use an admin bypass.
@@ -58,17 +61,39 @@ Before using `--force-with-lease`, verify:
 - Current branch is the assigned worktree branch (not `main` or another agent's branch).
 - Remote ref matches expectations (no unexpected pushes from others).
 
+### Attribution semantics
+
+Git's primary `author` field, a `Co-authored-by` trailer, and the custom `Agent` trailer record different facts:
+
+- The primary Git author identifies the person or identity responsible for the commit in Git history.
+- `Co-authored-by` credits an additional contributor; it does not replace or prove the primary author.
+- `Agent` identifies the coding agent that produced the commit. Every Codex-authored commit must include the exact trailers `Agent: Codex` and `Co-authored-by: Codex <noreply@openai.com>`.
+
+Audit attribution only on commits actually introduced by the submitted pull-request head: commits reachable from the PR head and not reachable from its base. Exclude synthetic review-merge or checkout commits and commits created only as test fixtures. Do not infer submitted attribution from unrelated repository history, a temporary merge commit created by a review system, or the presence of a co-author trailer alone.
+
+### Team-maintainer operating model
+
+An explicit user request to implement scoped work authorizes the assigned worker to create the scoped branch/worktree, edit code, commit, make the first push, and create the PR without repeated confirmation. That authority never authorizes a merge, auto-merge, merge queue, destructive action, or work outside the assigned scope; Rust remains the hard enforcement boundary.
+
+- **Beads:** Use Beads as lightweight canonical state: one task per cohesive tranche and claim it before coding. Complete acceptance prose, Linear sync, GitHub child issues, project metadata, and audit reports may follow implementation, but must be complete by PR handoff rather than blocking the first edit.
+- **Isolation and identity:** A dirty or stale primary checkout is not a blocker. Preserve it, bootstrap a clean source/clone, and use `wh` for the assigned worktree. Prefer reclaim and clear identity over aborting a recoverable setup. A newly created, unpublished assigned branch must equal the verified remote-base commit before edits. A published branch contains job history and is not compared for equality with the base; fetch its expected upstream and verify the configured upstream plus the expected local/remote relationship instead. Stop on an unexpected remote commit, behind state, or divergence until it is reconciled safely.
+- **Parallel work:** One writable worker owns one assigned worktree and branch. The manager coordinates separate workers through explicit assignments, status, dependencies, and handoffs. Never allow multiple writers to share one worktree, even for declared disjoint paths. One controller retains commit and push authority for each assignment.
+- **Review and validation:** After the first tested implementation, require one independent review matched to the risk before final publication. Add review only for a named high-risk boundary or an actual finding that warrants follow-up. Run focused gates during work. Immediately before publication, align or rebase an unpublished branch onto the verified base, or reconcile a published branch with its expected upstream, then run exactly one complete native gate suite on the exact would-be-pushed head; any later tree change invalidates that run. An issue may add focused checks; it must not replace or reduce that final suite. Do not require serial policy audits or duplicate full-suite runs from every subagent.
+- **Routine remediation:** Automatically fix safe mechanical findings within scope. Stop for a genuine ownership collision, a destructive or out-of-scope action, an unresolved Critical/Important correctness issue, a material user design decision, or an explicit fail-closed condition in a portable worker contract. A required gate failure or timeout blocks commit/push handoff until it is repaired or the user explicitly changes scope; an in-scope repair does not require another confirmation.
+- **GitHub access:** GitHub MCP remains preferred; when it is unavailable, use `gh` immediately rather than waiting for connector retries.
+- **Handoff:** Commit, push, and PR handoff are expected outcomes of authorized implementation. Interactive monitoring belongs to the companion `babysit-pr` skill. Merge remains separately and explicitly authorized under the protocol above.
+
 ### Branch/worktree pre-edit checklist
 
 Before making any code change, verify:
 
 1. **Worktree isolation:** `pwd` is inside the assigned worktree path.
 2. **Branch correctness:** `git branch --show-current` matches the assigned feature branch.
-3. **Clean state:** `git status` shows no uncommitted changes from other work.
-4. **Remote alignment:** `git fetch && git status` confirms the branch tracks the expected remote.
+3. **Clean assigned state:** The assigned worktree has no uncommitted changes from other work. A dirty or stale primary checkout must be preserved and is not a reason to abort.
+4. **Remote alignment:** `git fetch` verifies the intended remote. A newly created, unpublished assigned branch must equal the exact verified remote-base commit before edits. For a published assigned branch, verify that its configured upstream is the expected remote branch and that local history is equal to or ahead of it only by job-owned commits; do not require equality with the base. Stop on an unexpected upstream, unexpected remote commits, a behind state, or divergence until it is reconciled safely.
 5. **No cross-boundary edits:** No file outside the worktree is modified.
 
-If any check fails, abort and report the mismatch.
+Stop and report an unsafe identity or path mismatch, a genuine ownership collision, or any other non-recoverable failure. Repair a clean bootstrap source or a newly created unpublished branch's verified-base alignment before editing; do not treat a stale primary checkout as a blocker.
 
 ### Enforcement layers
 
@@ -97,36 +122,15 @@ bd close <id>         # Complete work
 
 ### Rules
 
-- Use `bd` for ALL task tracking — do NOT use TodoWrite, TaskCreate, or markdown TODO lists
-- Run `bd prime` for detailed command reference and session close protocol
-- Use `bd remember` for persistent knowledge — do NOT use MEMORY.md files
+- Use `bd` as the lightweight canonical task state: one task per cohesive tranche, claimed before code. Do not substitute TodoWrite, TaskCreate, or markdown TODO lists.
+- Run `bd prime` for command reference when needed. Acceptance text, Linear sync, GitHub child issues, project metadata, and audit reports may follow implementation but must be complete by PR handoff.
+- Use `bd remember` for persistent knowledge — do NOT use MEMORY.md files.
 
 **Architecture in one line:** issues live in a local Dolt DB; sync uses `refs/dolt/data` on your git remote; `.beads/issues.jsonl` is a passive export. See https://github.com/gastownhall/beads/blob/main/docs/SYNC_CONCEPTS.md for details and anti-patterns.
 
 ## Session Completion
 
-**When ending a work session**, you MUST complete ALL steps below. Work is NOT complete until `git push` succeeds.
-
-**MANDATORY WORKFLOW:**
-
-1. **File issues for remaining work** - Create issues for anything that needs follow-up
-2. **Run quality gates** (if code changed) - Tests, linters, builds
-3. **Update issue status** - Close finished work, update in-progress items
-4. **PUSH TO REMOTE** - This is MANDATORY:
-   ```bash
-   git pull --rebase
-   git push
-   git status  # MUST show "up to date with origin"
-   ```
-5. **Clean up** - Clear stashes, prune remote branches
-6. **Verify** - All changes committed AND pushed
-7. **Hand off** - Provide context for next session
-
-**CRITICAL RULES:**
-- Work is NOT complete until `git push` succeeds
-- NEVER stop before pushing - that leaves work stranded locally
-- NEVER say "ready to push when you are" - YOU must push
-- If push fails, resolve and retry until it succeeds
+For authorized implementation, complete the cohesive tranche: run focused gates during work and the complete native gate suite once on the exact HEAD before push; commit, push, and create or update the PR for handoff. Record remaining follow-up in Beads and complete required tracking and metadata by PR handoff. Do not add redundant full-suite runs, serial audits, or cleanup that is unrelated to the tranche. A specific user instruction that withholds a push or PR action controls that action. Merge is always a separate, explicitly authorized operation.
 <!-- END BEADS INTEGRATION -->
 
 ## Hybrid architecture
@@ -191,7 +195,7 @@ The installable `SKILL.md` will own platform-facing prompts and command guidance
 
 1. The operator or agent supplies GitHub or Linear issue/PR context.
 2. Python discovers eligible work under the owner allowlist and partitions independent jobs.
-3. Rust allocates `{base}/{owner}/{repo}/{job_id}` and creates the assigned branch worktree.
+3. Rust allocates `{base}/{owner}/{repo}/{job_id}` and creates the assigned branch worktree from an explicit start point, never ambient `HEAD`.
 4. A worker agent changes only that worktree and branch.
 5. Rust validates mutations and performs allowlisted `git` or `gh` subprocess calls.
 6. Python opens or checks the PR, processes stacks bottom-up, maintains local watchlist state, and reports residual blockers.

@@ -22,10 +22,10 @@ Abort and report if any of these fail:
 
 - Issue is closed, is a pull request, or has no actionable acceptance criteria
 - Owner is outside the configured allowlist (unless the operator named this repo/job explicitly)
-- Worktree path, branch, remote, upstream, or cleanliness check fails
+- Unsafe identity or path mismatch, a genuine ownership collision, or a non-recoverable cleanliness/remote check. Exact remote-base equality applies only to a newly created, unpublished assigned branch. A published branch must have the expected upstream and local/remote relationship instead. Repair a clean bootstrap source or unpublished verified-base alignment before editing; do not abort isolated work because a primary checkout is dirty or stale.
 - `wh` is missing and no enforcing wrapper is available (mutating runs)
 - Any required quality gate fails or times out
-- A deny-listed command would be required (merge, bare `--force` / `-f`)
+- A deny-listed command would be required (GitHub merge, local merge of another PR or stacked/peer branch, bare `--force` / `-f`)
 - `git push` exits non-zero or the remote rejects the push
 
 ## Stages
@@ -46,8 +46,10 @@ Abort and report if any of these fail:
    - If `wh` is missing, a platform-specific wrapper may call Git only after it has enforced: worktree root under the configured base, no path traversal, expected job branch, expected remote, owner allowlist from `WH_ALLOWED_OWNERS` or explicit API args, and assigned-worktree identity.
    - Raw `git worktree add` is forbidden on mutating runs.
 4. Suggested issue branch: `hive/issue-<n>-<short-slug>` (document any local override).
-5. Run the pre-edit checklist in `AGENTS.md` / `SKILL.md`: worktree path, `git branch --show-current`, clean tree, expected remote, no path escape.
-6. One writable worktree per job. Do not share it with another agent.
+5. For a newly created, unpublished assigned branch, fetch the intended remote base and prove that the branch equals that exact remote-base commit before edits. It may have no upstream only for this creation proof; never use an ambient or stale `HEAD` as the base.
+6. For a published assigned branch, fetch and verify the configured expected upstream and the expected local/remote relationship; do not compare the branch for equality with the base. Stop on an unexpected upstream, unexpected remote commit, behind state, or divergence.
+7. Run the remaining pre-edit checklist in `AGENTS.md` / `SKILL.md`: worktree path, `git branch --show-current`, clean assigned tree, expected remote, no path escape.
+8. One writable worktree per job. Do not share it with another agent.
 
 ### 3. Implement
 
@@ -55,11 +57,13 @@ Abort and report if any of these fail:
 - Stay inside Rust / Python / skill ownership (`AGENTS.md`).
 - No drive-by refactors. No files outside the worktree.
 
-### 4. Validate (fail-closed)
+### 4. Focused validation during implementation (fail-closed)
 
-Run the narrowest relevant checks first, then the gates in `README.md`.
+Run focused, task-relevant checks as changes are made. An issue may add
+focused checks. Do not use those extra checks, or an early full native
+suite, as a substitute for the final exact-head run in Stage 6.
 
-For this repository, unless the issue names a smaller subset:
+The complete native suite for this repository is always:
 
 ```bash
 cargo fmt --all -- --check
@@ -71,7 +75,12 @@ If `python/` changed, also run the Python test extra documented in `README.md`.
 
 Run every `cargo` and Python check under an explicit process timeout supplied by the host (orchestrator supervisor, CI job timeout, or equivalent). Do not use a Linux-only timeout command as the contract.
 
-If a required gate fails or the process is killed for time, **do not commit**. Report the failure or timeout as a residual on the issue. A hang or timeout is not a license to skip the gate and commit anyway.
+If a focused required gate fails or the process is killed for time, **do not advance to the final publication sequence**. Report the failure or timeout as a residual on the issue. A hang or timeout is not a license to skip the gate and push anyway.
+
+After the first tested implementation, obtain one independent review matched to
+the change's risk before final publication. Additional review is required only
+for a named high-risk boundary or a reproduced finding that warrants follow-up.
+Address in-scope findings and rerun affected focused checks before continuing.
 
 ### 5. Commit
 
@@ -81,15 +90,15 @@ If a required gate fails or the process is killed for time, **do not commit**. R
 
 ### 6. Push
 
-Immediately before `git pull --rebase` or `git push`, fail closed if any of these differ from the assigned job: worktree path (`git rev-parse --show-toplevel`), job branch (`git branch --show-current`), remote, or upstream. Abort and report. Do not rebase or push on a mismatch.
+Immediately before final alignment or `git push`, fail closed if any of these differ from the assigned job: worktree path (`git rev-parse --show-toplevel`), job branch (`git branch --show-current`), or remote. A published branch must also have its expected upstream and local/remote relationship. A newly created, unpublished assigned branch may lack an upstream only when the Stage 2 exact remote-base proof succeeded. Abort and report on any mismatch. Do not rebase or push on a mismatch.
 
 Then:
 
-1. `git pull --rebase`. Require a **successful, conflict-free** rebase before anything else. If rebase fails (non-zero exit) or leaves conflicts, **stop**: record the rebase issue as a residual, do **not** run validation gates, and do **not** `git push`.
-2. Re-run **all** required validation gates from stage 4 (same process timeouts) on the rebased tree. The commit about to be pushed must be covered. If any gate fails or times out, **do not push**. Report residuals.
-3. `git push`. If the command exits non-zero or the remote rejects the update, **stop before Stage 7**: record the push failure as a residual. Do **not** report `git rev-parse HEAD` as the pushed SHA.
+1. On a newly created, unpublished branch, fetch and verify the expected remote base again, then perform final alignment or a **successful, conflict-free** rebase on that assigned unpublished branch. Never let an ambient or stale `HEAD` substitute for the verified base. On a published branch, fetch its expected upstream and reconcile the local branch with that upstream; `git pull --rebase` must be successful and conflict-free when a pull is needed. Do not require the published branch to equal the base. If alignment or reconciliation fails or leaves conflicts, **stop**: record the issue as a residual, do **not** run the full native gates, and do **not** `git push`.
+2. Always run the complete native suite named in Stage 4 exactly once (with the same process timeouts) on the exact `HEAD` that would be pushed. An issue may add focused checks but must not replace or reduce this suite. Any later tree change invalidates the run and requires repeating final alignment and this full suite. If any gate fails or times out, **do not push**. Report residuals.
+3. For a first publication, push the already verified remote and assigned branch explicitly: `git push -u <verified-remote> <assigned-branch>`. After upstream is set, use `git push`. If the command exits non-zero or the remote rejects the update, **stop before Stage 7**: record the push failure as a residual. Do **not** report `git rev-parse HEAD` as the pushed SHA.
 
-- Never merge.
+- Never merge, including a local `git merge` of another PR or stacked/peer branch.
 - Never `git push --force` or `git push -f`.
 - `--force-with-lease` only on **this** job branch after a rebase you own, after the identity check above succeeds.
 
