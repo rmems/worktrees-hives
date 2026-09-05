@@ -86,12 +86,26 @@ fn leading_hex_oid_prefix(start_point: StartPoint<'_>) -> Option<HexOidPrefix<'_
     if hex_len == 0 {
         return None;
     }
-    let rest = &text[hex_len..];
-    if rest.is_empty() || rest.starts_with('~') || rest.starts_with('^') || rest.starts_with("@{") {
-        Some(HexOidPrefix(&text[..hex_len]))
-    } else {
-        None
+    if !hex_oid_rest_is_boundary(&text[hex_len..]) {
+        return None;
     }
+    Some(HexOidPrefix(&text[..hex_len]))
+}
+
+/// True when a leading hex run is a complete selector: bare, or immediately
+/// followed by a commit-ish decoration. Guard clauses keep the match set
+/// explicit without a compound boolean.
+fn hex_oid_rest_is_boundary(rest: &str) -> bool {
+    if rest.is_empty() {
+        return true;
+    }
+    if rest.starts_with('~') {
+        return true;
+    }
+    if rest.starts_with('^') {
+        return true;
+    }
+    rest.starts_with("@{")
 }
 
 fn reject_non_full_hex_oid(hex_prefix: HexOidPrefix<'_>) -> Result<()> {
