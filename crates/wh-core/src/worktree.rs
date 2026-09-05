@@ -5,7 +5,22 @@ use std::process::Command;
 use crate::error::{
     Error, PolicyCode, Result, WorktreeCreationFailure, WorktreePostconditionFailure,
 };
+use crate::identity::{
+    BranchName, BranchRef, CommitId, JobId, Owner, Repo, StartPoint, resolve_start_commit,
+};
 use crate::paths::{canonicalize_for_tools, derive_worktree_path, worktree_base_path};
+
+#[derive(Clone, Copy)]
+struct GitArgList<'a>(&'a [&'a str]);
+
+#[derive(Clone, Copy)]
+struct IoContext(&'static str);
+
+#[derive(Clone, Copy)]
+struct PorcelainListing<'a>(&'a str);
+
+#[derive(Clone, Copy)]
+struct PostconditionCause<'a>(&'a str);
 
 /// Result of a worktree creation operation.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -105,22 +120,29 @@ impl WorktreeManager {
 
     /// Create a worktree from a typed request used by CLI and orchestration adapters.
     pub fn create_with_request(&self, request: WorktreeCreateRequest<'_>) -> Result<Worktree> {
-        validate_worktree_branch(request.branch)?;
+        let branch = BranchName(request.branch);
+        let start_point = StartPoint(request.start_point);
+        validate_worktree_branch(branch)?;
         let base = self.base_path()?;
         validate_repo_root(request.repo_root)?;
 
         // Resolve the caller-selected start point before any mutation. Appending
         // ^{commit} rejects trees/blobs and peels annotated tags to commits.
-        let start_commit = resolve_start_commit(request.repo_root, request.start_point)?;
-        let worktree_path = prepare_worktree_path(base, &request)?;
-        reject_unproven_resume(&request, &start_commit)?;
-        add_worktree(&request, &worktree_path, &start_commit)?;
+        let start_commit = resolve_start_commit(request.repo_root, start_point)?;
+        let worktree_path = prepare_worktree_path(
+            base,
+            Owner(request.owner),
+            Repo(request.repo),
+            JobId(request.job_id),
+        )?;
+        reject_unproven_resume(&request, CommitId(&start_commit))?;
+        add_worktree(&request, &worktree_path, CommitId(&start_commit))?;
 
         let head_commit = verify_creation_postconditions(CreationPostconditions {
             repo_root: request.repo_root,
             worktree_path: &worktree_path,
-            expected_branch: request.branch,
-            expected_commit: &start_commit,
+            expected_branch: branch,
+            expected_commit: CommitId(&start_commit),
         })?;
 
         Ok(Worktree {
@@ -270,18 +292,26 @@ impl WorktreeManager {
     }
 }
 
-fn validate_worktree_branch(branch: &str) -> Result<()> {
-    match branch.chars().next() {
+fn validate_worktree_branch(branch: BranchName<'_>) -> Result<()> {
+    match branch.as_str().chars().next() {
         None | Some('-') => Err(Error::GitCommand {
             args: vec!["worktree".into(), "add".into()],
-            stderr: format!("invalid branch name (empty or option-looking): {branch:?}"),
+            stderr: format!(
+                "invalid branch name (empty or option-looking): {:?}",
+                branch.as_str()
+            ),
         }),
         Some(_) => Ok(()),
     }
 }
 
-fn prepare_worktree_path(base: &Path, request: &WorktreeCreateRequest<'_>) -> Result<PathBuf> {
-    let worktree_path = derive_worktree_path(base, request.owner, request.repo, request.job_id)?;
+fn prepare_worktree_path(
+    base: &Path,
+    owner: Owner<'_>,
+    repo: Repo<'_>,
+    job_id: JobId<'_>,
+) -> Result<PathBuf> {
+    let worktree_path = derive_worktree_path(base, owner.as_str(), repo.as_str(), job_id.as_str())?;
 
     // Reject symlink segments beneath the canonical base before and after
     // creating parents so a planted link is never followed.
@@ -309,14 +339,19 @@ fn validate_repo_root(repo_root: &Path) -> Result<()> {
     })
 }
 
-fn reject_unproven_resume(request: &WorktreeCreateRequest<'_>, start_commit: &str) -> Result<()> {
-    if branch_exists_in_repo(request.repo_root, request.branch)? {
+fn reject_unproven_resume(
+    request: &WorktreeCreateRequest<'_>,
+    start_commit: CommitId<'_>,
+) -> Result<()> {
+    let branch = BranchName(request.branch);
+    if branch_exists_in_repo(request.repo_root, branch)? {
         return Err(Error::PolicyViolation {
             code: PolicyCode::WorktreeResumeUnproven,
             message: format!(
                 "refusing to reuse existing branch {:?} at requested commit \
-                 {start_commit}: safe resume identity is not proven",
-                request.branch
+                 {}: safe resume identity is not proven",
+                branch.as_str(),
+                start_commit.as_str()
             ),
         });
     }
@@ -326,8 +361,9 @@ fn reject_unproven_resume(request: &WorktreeCreateRequest<'_>, start_commit: &st
 fn add_worktree(
     request: &WorktreeCreateRequest<'_>,
     worktree_path: &Path,
-    start_commit: &str,
+    start_commit: CommitId<'_>,
 ) -> Result<()> {
+    let branch = BranchName(request.branch);
     // Create the branch and linked worktree in one operation. If a concurrent
     // actor creates the ref first, Git fails rather than attaching to it.
     let output = Command::new("git")
@@ -336,10 +372,10 @@ fn add_worktree(
         .arg("worktree")
         .arg("add")
         .arg("-b")
-        .arg(request.branch)
+        .arg(branch.as_str())
         .arg("--")
         .arg(worktree_path)
-        .arg(start_commit)
+        .arg(start_commit.as_str())
         .output()
         .map_err(|e| Error::Io {
             context: "spawn git worktree add",
@@ -349,11 +385,11 @@ fn add_worktree(
     if output.status.success() {
         return Ok(());
     }
-    let residual = inspect_residual_state(request.repo_root, worktree_path, request.branch);
+    let residual = inspect_residual_state(request.repo_root, worktree_path, branch);
     Err(Error::WorktreeCreationFailed(Box::new(
         WorktreeCreationFailure {
             path: worktree_path.to_path_buf(),
-            branch: request.branch.to_owned(),
+            branch: branch.as_str().to_owned(),
             path_exists: residual.path_exists,
             branch_commit: residual.branch_commit,
             head_commit: residual.head_commit,
@@ -380,14 +416,15 @@ fn is_bare_repo(path: &Path) -> Result<bool> {
 }
 
 /// Check if a branch exists in the repository.
-fn branch_exists_in_repo(repo_root: &Path, branch: &str) -> Result<bool> {
+fn branch_exists_in_repo(repo_root: &Path, branch: BranchName<'_>) -> Result<bool> {
+    let branch_ref = format!("refs/heads/{}", branch.as_str());
     let output = Command::new("git")
         .arg("-C")
         .arg(repo_root)
         .arg("show-ref")
         .arg("--verify")
         .arg("--quiet")
-        .arg(format!("refs/heads/{branch}"))
+        .arg(&branch_ref)
         .output()
         .map_err(|e| Error::Io {
             context: "check branch existence",
@@ -402,243 +439,159 @@ fn branch_exists_in_repo(repo_root: &Path, branch: &str) -> Result<bool> {
                 "show-ref".into(),
                 "--verify".into(),
                 "--quiet".into(),
-                format!("refs/heads/{branch}"),
+                branch_ref,
             ],
             stderr: String::from_utf8_lossy(&output.stderr).to_string(),
         }),
     }
 }
 
-/// Leading all-hex object-id text when it is the entire start point or is
-/// immediately followed by a commit-ish decoration (`~`, `^`, `@{`).
-///
-/// This closes abbreviated-OID smuggling such as `<abbrev>~0` while leaving
-/// symbolic refs (`refs/heads/x`, `develop~1`, tags) untouched.
-fn leading_hex_oid_prefix(start_point: &str) -> Option<&str> {
-    let hex_len = start_point
-        .bytes()
-        .take_while(u8::is_ascii_hexdigit)
-        .count();
-    if hex_len == 0 {
-        return None;
-    }
-    let rest = &start_point[hex_len..];
-    if rest.is_empty() || is_commitish_decoration(rest) {
-        Some(&start_point[..hex_len])
-    } else {
-        None
-    }
-}
-
-fn is_commitish_decoration(rest: &str) -> bool {
-    rest.starts_with('~') || rest.starts_with('^') || rest.starts_with("@{")
-}
-
-fn reject_non_full_hex_oid(hex_prefix: &str) -> Result<()> {
-    if matches!(hex_prefix.len(), 40 | 64) {
-        return Ok(());
-    }
-    Err(Error::GitCommand {
-        args: vec!["rev-parse".into(), "--verify".into()],
-        stderr: "all-hex start point must be a full 40- or 64-character object id".into(),
-    })
-}
-
-fn reject_hex_oid_mismatch(start_point: &str, hex_prefix: &str, commit: &str) -> Result<()> {
-    if hex_prefix.len() == commit.len() && commit.eq_ignore_ascii_case(hex_prefix) {
-        return Ok(());
-    }
-    Err(Error::GitCommand {
-        args: vec!["rev-parse".into(), "--verify".into()],
-        stderr: format!(
-            "all-hex start point must equal the full canonical object id; requested \
-             {start_point:?}, resolved {commit:?}"
-        ),
-    })
-}
-
-/// Resolve a caller-supplied commit-ish to one exact commit object.
-fn resolve_start_commit(repo_root: &Path, start_point: &str) -> Result<String> {
-    reject_empty_selector(start_point, "start point must not be empty")?;
-    enforce_leading_hex_oid(start_point, None)?;
-    let commit = peel_to_commit(repo_root, start_point)?;
-    reject_empty_selector(
-        &commit,
-        format!("start point {start_point:?} resolved to an empty commit id"),
-    )?;
-    enforce_leading_hex_oid(start_point, Some(&commit))?;
-    Ok(commit)
-}
-
-fn reject_empty_selector(value: &str, stderr: impl Into<String>) -> Result<()> {
-    if value.is_empty() {
-        return Err(Error::GitCommand {
-            args: vec!["rev-parse".into(), "--verify".into()],
-            stderr: stderr.into(),
-        });
-    }
-    Ok(())
-}
-
-fn enforce_leading_hex_oid(start_point: &str, resolved: Option<&str>) -> Result<()> {
-    let Some(hex_prefix) = leading_hex_oid_prefix(start_point) else {
-        return Ok(());
-    };
-    reject_non_full_hex_oid(hex_prefix)?;
-    match resolved {
-        Some(commit) => reject_hex_oid_mismatch(start_point, hex_prefix, commit),
-        None => Ok(()),
-    }
-}
-
-fn peel_to_commit(repo_root: &Path, start_point: &str) -> Result<String> {
-    let commitish = format!("{start_point}^{{commit}}");
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(repo_root)
-        .arg("rev-parse")
-        .arg("--verify")
-        .arg("--end-of-options")
-        .arg(&commitish)
-        .output()
-        .map_err(|e| Error::Io {
-            context: "resolve worktree start point",
-            source: e,
-        })?;
-
-    if output.status.success() {
-        return Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned());
-    }
-    Err(Error::GitCommand {
-        args: vec![
-            "rev-parse".into(),
-            "--verify".into(),
-            "--end-of-options".into(),
-            commitish,
-        ],
-        stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-    })
-}
-
 struct CreationPostconditions<'a> {
     repo_root: &'a Path,
     worktree_path: &'a Path,
-    expected_branch: &'a str,
-    expected_commit: &'a str,
+    expected_branch: BranchName<'a>,
+    expected_commit: CommitId<'a>,
 }
 
 impl CreationPostconditions<'_> {
     fn actual_branch_ref(&self) -> Result<String> {
         git_stdout(
             self.worktree_path,
-            &["symbolic-ref", "--quiet", "HEAD"],
-            "verify created worktree branch",
+            GitArgList(&["symbolic-ref", "--quiet", "HEAD"]),
+            IoContext("verify created worktree branch"),
         )
-        .map_err(|error| self.failure(None, &error.to_string()))
+        .map_err(|error| self.failure(None, PostconditionCause(&error.to_string())))
     }
 
-    fn branch_commit(&self, actual_branch: &str) -> Result<String> {
+    fn branch_commit(&self, actual_branch: BranchRef<'_>) -> Result<String> {
         git_stdout(
             self.repo_root,
-            &[
+            GitArgList(&[
                 "rev-parse",
                 "--verify",
                 "--end-of-options",
-                &format!("refs/heads/{}^{{commit}}", self.expected_branch),
-            ],
-            "verify created branch commit",
+                &format!("refs/heads/{}^{{commit}}", self.expected_branch.as_str()),
+            ]),
+            IoContext("verify created branch commit"),
         )
-        .map_err(|error| self.failure(Some(actual_branch.to_owned()), &error.to_string()))
+        .map_err(|error| self.failure(Some(actual_branch), PostconditionCause(&error.to_string())))
     }
 
-    fn head_commit(&self, actual_branch: &str) -> Result<String> {
+    fn head_commit(&self, actual_branch: BranchRef<'_>) -> Result<String> {
         git_stdout(
             self.worktree_path,
-            &["rev-parse", "--verify", "HEAD^{commit}"],
-            "verify created worktree HEAD",
+            GitArgList(&["rev-parse", "--verify", "HEAD^{commit}"]),
+            IoContext("verify created worktree HEAD"),
         )
-        .map_err(|error| self.failure(Some(actual_branch.to_owned()), &error.to_string()))
+        .map_err(|error| self.failure(Some(actual_branch), PostconditionCause(&error.to_string())))
     }
 
     fn verify_identity(
         &self,
-        actual_branch_ref: &str,
-        branch_commit: &str,
-        head_commit: &str,
+        actual_branch_ref: BranchRef<'_>,
+        branch_commit: CommitId<'_>,
+        head_commit: CommitId<'_>,
     ) -> Result<()> {
-        let expected_branch_ref = format!("refs/heads/{}", self.expected_branch);
-        let actual = [actual_branch_ref, branch_commit, head_commit];
+        let expected_branch_ref = format!("refs/heads/{}", self.expected_branch.as_str());
+        let actual = [
+            actual_branch_ref.as_str(),
+            branch_commit.as_str(),
+            head_commit.as_str(),
+        ];
         let expected = [
             expected_branch_ref.as_str(),
-            self.expected_commit,
-            self.expected_commit,
+            self.expected_commit.as_str(),
+            self.expected_commit.as_str(),
         ];
         if actual != expected {
             return Err(self.failure(
-                Some(actual_branch_ref.to_owned()),
-                &format!(
-                    "identity mismatch: actual branch ref={actual_branch_ref:?} \
-                     branch_commit={branch_commit}, head_commit={head_commit}"
+                Some(actual_branch_ref),
+                PostconditionCause(&format!(
+                    "identity mismatch: actual branch ref={:?} \
+                     branch_commit={}, head_commit={}",
+                    actual_branch_ref.as_str(),
+                    branch_commit.as_str(),
+                    head_commit.as_str()
+                )),
+            ));
+        }
+        Ok(())
+    }
+
+    fn verify_registration(
+        &self,
+        actual_branch_ref: BranchRef<'_>,
+        head_commit: CommitId<'_>,
+    ) -> Result<()> {
+        let listing = git_stdout(
+            self.repo_root,
+            GitArgList(&["worktree", "list", "--porcelain"]),
+            IoContext("verify created worktree registration"),
+        )
+        .map_err(|error| {
+            self.failure(
+                Some(actual_branch_ref),
+                PostconditionCause(&error.to_string()),
+            )
+        })?;
+        if !worktree_registration_matches(
+            PorcelainListing(&listing),
+            self.worktree_path,
+            actual_branch_ref,
+            head_commit,
+        ) {
+            return Err(self.failure(
+                Some(actual_branch_ref),
+                PostconditionCause(
+                    "worktree registration does not match the expected path, branch, and HEAD",
                 ),
             ));
         }
         Ok(())
     }
 
-    fn verify_registration(&self, actual_branch_ref: &str, head_commit: &str) -> Result<()> {
-        let listing = git_stdout(
-            self.repo_root,
-            &["worktree", "list", "--porcelain"],
-            "verify created worktree registration",
-        )
-        .map_err(|error| self.failure(Some(actual_branch_ref.to_owned()), &error.to_string()))?;
-        if !worktree_registration_matches(
-            &listing,
-            self.worktree_path,
-            actual_branch_ref,
-            head_commit,
-        ) {
-            return Err(self.failure(
-                Some(actual_branch_ref.to_owned()),
-                "worktree registration does not match the expected path, branch, and HEAD",
-            ));
-        }
-        Ok(())
-    }
-
-    fn failure(&self, actual_branch: Option<String>, cause: &str) -> Error {
+    fn failure(
+        &self,
+        actual_branch: Option<BranchRef<'_>>,
+        cause: PostconditionCause<'_>,
+    ) -> Error {
         let residual =
             inspect_residual_state(self.repo_root, self.worktree_path, self.expected_branch);
         Error::WorktreePostconditionFailed(Box::new(WorktreePostconditionFailure {
             path: self.worktree_path.to_path_buf(),
-            branch: self.expected_branch.to_owned(),
-            expected_commit: self.expected_commit.to_owned(),
-            actual_branch,
+            branch: self.expected_branch.as_str().to_owned(),
+            expected_commit: self.expected_commit.as_str().to_owned(),
+            actual_branch: actual_branch.map(|branch| branch.as_str().to_owned()),
             path_exists: residual.path_exists,
             branch_commit: residual.branch_commit,
             head_commit: residual.head_commit,
             worktree_registered: residual.worktree_registered,
-            reason: cause.to_owned(),
+            reason: cause.0.to_owned(),
         }))
     }
 }
 
 fn verify_creation_postconditions(postconditions: CreationPostconditions<'_>) -> Result<String> {
     let actual_branch_ref = postconditions.actual_branch_ref()?;
-    let branch_commit = postconditions.branch_commit(&actual_branch_ref)?;
-    let head_commit = postconditions.head_commit(&actual_branch_ref)?;
-    postconditions.verify_identity(&actual_branch_ref, &branch_commit, &head_commit)?;
-    postconditions.verify_registration(&actual_branch_ref, &head_commit)?;
+    let actual_branch = BranchRef(&actual_branch_ref);
+    let branch_commit = postconditions.branch_commit(actual_branch)?;
+    let head_commit = postconditions.head_commit(actual_branch)?;
+    postconditions.verify_identity(
+        actual_branch,
+        CommitId(&branch_commit),
+        CommitId(&head_commit),
+    )?;
+    postconditions.verify_registration(actual_branch, CommitId(&head_commit))?;
     Ok(head_commit)
 }
 
 fn worktree_registration_matches(
-    listing: &str,
+    listing: PorcelainListing<'_>,
     expected_path: &Path,
-    expected_branch_ref: &str,
-    expected_head: &str,
+    expected_branch_ref: BranchRef<'_>,
+    expected_head: CommitId<'_>,
 ) -> bool {
-    listing.split("\n\n").any(|entry| {
+    listing.0.split("\n\n").any(|entry| {
         let mut path = None;
         let mut branch = None;
         let mut head = None;
@@ -652,32 +605,35 @@ fn worktree_registration_matches(
             }
         }
         path == Some(expected_path)
-            && branch == Some(expected_branch_ref)
-            && head == Some(expected_head)
+            && branch == Some(expected_branch_ref.as_str())
+            && head == Some(expected_head.as_str())
     })
 }
 
-fn git_stdout(repo: &Path, args: &[&str], context: &'static str) -> Result<String> {
+fn git_stdout(repo: &Path, args: GitArgList<'_>, context: IoContext) -> Result<String> {
     let output = Command::new("git")
         .arg("-C")
         .arg(repo)
-        .args(args)
+        .args(args.0)
         .output()
-        .map_err(|e| Error::Io { context, source: e })?;
+        .map_err(|e| Error::Io {
+            context: context.0,
+            source: e,
+        })?;
     if !output.status.success() {
         return Err(Error::GitCommand {
-            args: args.iter().map(|arg| (*arg).to_owned()).collect(),
+            args: args.0.iter().map(|arg| (*arg).to_owned()).collect(),
             stderr: String::from_utf8_lossy(&output.stderr).to_string(),
         });
     }
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
 }
 
-fn optional_git_stdout(repo: &Path, args: &[&str]) -> Option<String> {
+fn optional_git_stdout(repo: &Path, args: GitArgList<'_>) -> Option<String> {
     Command::new("git")
         .arg("-C")
         .arg(repo)
-        .args(args)
+        .args(args.0)
         .output()
         .ok()
         .filter(|output| output.status.success())
@@ -691,24 +647,31 @@ struct ResidualState {
     worktree_registered: bool,
 }
 
-fn inspect_residual_state(repo_root: &Path, worktree_path: &Path, branch: &str) -> ResidualState {
+fn inspect_residual_state(
+    repo_root: &Path,
+    worktree_path: &Path,
+    branch: BranchName<'_>,
+) -> ResidualState {
     let branch_commit = optional_git_stdout(
         repo_root,
-        &[
+        GitArgList(&[
             "rev-parse",
             "--verify",
-            &format!("refs/heads/{branch}^{{commit}}"),
-        ],
+            &format!("refs/heads/{}^{{commit}}", branch.as_str()),
+        ]),
     );
-    let head_commit =
-        optional_git_stdout(worktree_path, &["rev-parse", "--verify", "HEAD^{commit}"]);
-    let worktree_registered = optional_git_stdout(repo_root, &["worktree", "list", "--porcelain"])
-        .is_some_and(|listing| {
-            listing.lines().any(|line| {
-                line.strip_prefix("worktree ")
-                    .is_some_and(|path| Path::new(path) == worktree_path)
-            })
-        });
+    let head_commit = optional_git_stdout(
+        worktree_path,
+        GitArgList(&["rev-parse", "--verify", "HEAD^{commit}"]),
+    );
+    let worktree_registered =
+        optional_git_stdout(repo_root, GitArgList(&["worktree", "list", "--porcelain"]))
+            .is_some_and(|listing| {
+                listing.lines().any(|line| {
+                    line.strip_prefix("worktree ")
+                        .is_some_and(|path| Path::new(path) == worktree_path)
+                })
+            });
     ResidualState {
         path_exists: worktree_path.exists(),
         branch_commit,
@@ -1174,8 +1137,8 @@ mod tests {
         let result = verify_creation_postconditions(CreationPostconditions {
             repo_root: &harness.repo_root,
             worktree_path: &wt.path,
-            expected_branch: "feature/postcondition",
-            expected_commit: &requested_commit,
+            expected_branch: BranchName("feature/postcondition"),
+            expected_commit: CommitId(&requested_commit),
         });
         assert!(matches!(result, Err(Error::WorktreePostconditionFailed(_))));
         assert_eq!(
@@ -1197,16 +1160,16 @@ mod tests {
         );
 
         assert!(worktree_registration_matches(
-            &correct,
+            PorcelainListing(&correct),
             path,
-            "refs/heads/feature/job",
-            &expected_head,
+            BranchRef("refs/heads/feature/job"),
+            CommitId(&expected_head),
         ));
         assert!(!worktree_registration_matches(
-            &wrong_branch,
+            PorcelainListing(&wrong_branch),
             path,
-            "refs/heads/feature/job",
-            &expected_head,
+            BranchRef("refs/heads/feature/job"),
+            CommitId(&expected_head),
         ));
     }
 
