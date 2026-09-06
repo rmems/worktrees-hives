@@ -22,6 +22,12 @@
 # invalidate this file.
 ---
 exclude_paths:
+  # Rust integration tests. These MUST be excluded at the top level, not only
+  # under the per-engine blocks below: the security engine is not scoped by
+  # those, so `temp_dir should not be used for security operations` fires on
+  # `crates/*/tests/*.rs` test fixtures. The previous config had `**/tests/**`
+  # here for the same reason; dropping it re-opened the hole.
+  - "crates/*/tests/**"
   - "AGENTS.md"
   - "CLAUDE.md"
   - "**/target/**"
