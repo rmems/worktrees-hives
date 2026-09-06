@@ -1,6 +1,6 @@
 # Response envelope examples
 
-Every fixture here is captured verbatim from the `wh` binary and then
+Every fixture here is captured verbatim from the `writ` binary and then
 pretty-printed. If you change an envelope, re-capture rather than hand-editing —
 four of the fixtures that previously lived here were fiction, and nothing caught
 it because nothing compared them to real output:
@@ -21,11 +21,11 @@ envelope under `--json`.
 stderr with exit code 2:
 
 ```console
-$ wh --json git-safe push --force
-wh: policy violation [BARE_FORCE_PUSH]: bare --force/-f is not allowed; use --force-with-lease only
+$ writ --json git-safe push --force
+writ: policy violation [BARE_FORCE_PUSH]: bare --force/-f is not allowed; use --force-with-lease only
 
-$ wh --json gh-safe pr merge 1
-wh: policy violation [MERGE_BLOCKED]: `gh pr merge` is not allowed
+$ writ --json gh-safe pr merge 1
+writ: policy violation [MERGE_BLOCKED]: `gh pr merge` is not allowed
 ```
 
 Do not write a fixture for an envelope those paths never produce. The bracketed
@@ -35,8 +35,8 @@ token is the stable `PolicyCode`; parse that rather than the prose.
 
 ```bash
 cargo build
-wh --json status                     # cli.status
-wh --json worktree list              # worktree.list
+writ --json status                     # cli.status
+writ --json worktree list              # worktree.list
 # error envelope, no repository mutation:
-wh --json worktree create --schema-version 2 --repo <repo> <owner> <repo-name> <job> <branch>
+writ --json worktree create --schema-version 2 --repo <repo> <owner> <repo-name> <job> <branch>
 ```
