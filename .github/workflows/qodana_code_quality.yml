@@ -64,7 +64,12 @@ jobs:
           # pr-mode is meaningless outside a pull_request event; see header.
           pr-mode: false
           # Space-separated args (the comma-separated form is deprecated).
-          args: --linter qodana-rust --within-docker=false
+          # The linter is named here so the workflow, not a file a contributor
+          # could edit, controls what runs -- but it must be the SAME pinned
+          # image as `qodana.yaml`. `--linter` overrides the file, so passing a
+          # bare `qodana-rust` here would silently defeat the pin and resolve an
+          # untagged EAP linter.
+          args: --linter jetbrains/qodana-rust:2026.1-eap --within-docker=false
           upload-result: true
         env:
           QODANA_TOKEN: ${{ secrets.QODANA_TOKEN }}

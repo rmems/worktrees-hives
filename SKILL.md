@@ -24,7 +24,7 @@ Before any mutation, read and apply the corresponding `AGENTS.md` sections:
 - [attribution semantics](AGENTS.md#attribution-semantics)
 - [team-maintainer operating model](AGENTS.md#team-maintainer-operating-model)
 
-This skill never grants an exception to those rules. Worker, orchestrator, scheduled, discovery, issue-to-PR, and companion-skill monitoring flows never merge, including by locally merging another PR or stacked/peer branch. If the authoritative policy is unavailable, contradictory, or cannot be enforced by the `wh`/Rust boundary, stop the mutating flow and report the blocker.
+This skill never grants an exception to those rules. Worker, orchestrator, scheduled, discovery, issue-to-PR, and companion-skill monitoring flows never merge, including by locally merging another PR or stacked/peer branch. If the authoritative policy is unavailable, contradictory, or cannot be enforced by the Rust boundary -- `wh` itself, or an enforcing wrapper that routes the mutation through `wh-core`'s allowlist and branch verification -- stop the mutating flow and report the blocker.
 
 ### Branch/worktree pre-edit checklist
 
