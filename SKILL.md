@@ -24,7 +24,7 @@ Before any mutation, read and apply the corresponding `AGENTS.md` sections:
 - [attribution semantics](AGENTS.md#attribution-semantics)
 - [team-maintainer operating model](AGENTS.md#team-maintainer-operating-model)
 
-This skill never grants an exception to those rules. Worker, orchestrator, scheduled, discovery, issue-to-PR, and companion-skill monitoring flows never merge, including by locally merging another PR or stacked/peer branch. If the authoritative policy is unavailable, contradictory, or cannot be enforced by the Python/`wh`/Rust boundary, stop the mutating flow and report the blocker.
+This skill never grants an exception to those rules. Worker, orchestrator, scheduled, discovery, issue-to-PR, and companion-skill monitoring flows never merge, including by locally merging another PR or stacked/peer branch. If the authoritative policy is unavailable, contradictory, or cannot be enforced by the `wh`/Rust boundary, stop the mutating flow and report the blocker.
 
 ### Branch/worktree pre-edit checklist
 
@@ -86,7 +86,7 @@ Worker prompts remain strictly non-merging. Do not forward the primary agent's m
 ### Enforcement routing
 
 This skill is portable procedure, not a security boundary. Route orchestrated
-mutations through Python and `wh`, with Rust enforcing the runtime boundary as
+mutations through `wh`, with Rust enforcing the runtime boundary as
 defined in [`AGENTS.md`](AGENTS.md#enforcement-layers). The separate interactive
 host merge path is available only to the primary agent after it completes the
 linked one-shot authorization protocol; never forward that authority to a

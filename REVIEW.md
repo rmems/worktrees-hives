@@ -40,7 +40,6 @@ For stacked pull requests, review and fix the bottom PR before its children. Re-
 ### Behavior and compatibility
 
 - [ ] JSON output follows the documented envelope and keeps stdout machine-readable.
-- [ ] Rust `wh` v1 and Python CLI/watchlist v2 contracts are reviewed independently; each breaking change bumps its own schema version.
 - [ ] Errors are actionable and policy rejections map to exit code 2.
 - [ ] Cross-platform path and process behavior does not assume a Linux-only environment.
 - [ ] New behavior has focused tests, including negative policy tests where relevant.
@@ -49,20 +48,20 @@ For stacked pull requests, review and fix the bottom PR before its children. Re-
 
 ## Language-specific review notes
 
-worktrees-hives is a Python/Rust hybrid. Each layer has distinct review concerns:
+worktrees-hives is a Rust workspace. Each area has distinct review concerns:
 
 ### Rust review notes
 
 Rust owns the hard safety boundary. Reviewers should check:
 
-- Policy is enforced in `wh-core`, not only in `clap` argument definitions or Python.
+- Policy is enforced in `wh-core`, not only in `clap` argument definitions.
 - Git and GitHub operations use explicit allowlists and structured argument vectors rather than shell command strings.
 - `gh pr merge` and merge-oriented `gh api` requests are impossible through product runtime public interfaces.
 - Branch verification occurs immediately before mutation to reduce time-of-check/time-of-use risk.
 - Canonicalization and component checks prevent `..`, symlink, or prefix-based path escape.
 - State writes use a temporary file and atomic replacement without leaving partial JSON.
 - Process timeouts terminate and reap children; this belongs to the later supervisor implementation.
-- Public error codes are stable enough for Python to classify without parsing prose.
+- Public error codes are stable enough for callers to classify without parsing prose.
 - Unsafe Rust remains forbidden unless a separately reviewed design justifies it.
 
 Run:
@@ -73,41 +72,6 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
-### Python review notes
-
-Python owns orchestration policy. Reviewers should check:
-
-- `WhClient` treats `wh` as the source of truth and does not duplicate Rust mutations.
-- `WH_BIN` and `PATH` lookup failures produce a clear `WhNotFoundError`.
-- Exit code 2 and structured policy errors become `PolicyError`, preserving the Rust error code.
-- Subprocess calls use argument arrays, bounded execution, captured output, and no shell interpolation.
-- Command capability classification consumes wrapper-option operands (including platform-specific arity); rejects behavior-changing wrapper assignments except the exact Git lazy-fetch neutralizer, tracks nested `env` clears and unsets in execution order, rejects command-lookup overrides, ambiguous clusters, and unsupported wrapper escapes, and recognizes console, windowed, free-threaded, and alternative Python launchers plus test-package `.__main__` aliases. Unwrap failures, interactive Python module routes, unchecked Git runtime configuration, partial-clone lazy fetches, configured archive formatters, named, ambient, peeled, sorted, or ref-format signature rendering, alternate-ref options on any revision consumer, implicit or explicit Git helper/viewer/transport/signature/credential/difftool execution, and `lab run --command` require the conservative shell capability set, so nested code, test, or experiment requirements are not collapsed. Trusted Git built-in names are matched case-sensitively, and legacy `git config` read actions are parsed before their first positional operand so read-looking values cannot hide a write. A no-capability object-materializing Git inspection must run through an effective `env GIT_NO_LAZY_FETCH=1`, end global pagination with `-P` / `--no-pager`, and explicitly set `core.fsmonitor=false`; a no-capability `status` also requires exact global `--no-optional-locks`, preventing index refreshes from invoking `post-index-change`. Pretty-rendering history commands must also set `log.showSignature=false` and select a built-in or inline `format:` / `tformat:` pretty format. Patch-producing history flags include clustered short options, while explicitly non-querying and helper-disabled Git forms remain usable under that neutralized configuration. Mutating and otherwise unclassified Git commands preserve the full conservative capability set because filters, hooks, transports, and shell aliases can execute beneath them. Non-Git unclassified executables remain outside this mapping by design and are not a universal allowlist.
-- Future #94/#95 execution wiring sanitizes inherited interpreter controls such as `PYTHONINSPECT`; the #93 classifier accepts structured argv only and cannot validate an environment override that is not represented there.
-- Discovery applies the owner allowlist before scheduling work.
-- Stacks are ordered bottom-up and children are deferred while their base is blocked.
-- Python watchlist v1 inputs migrate on rewrite to v2 without `fix_count`, `max_fixes`, or `babysit_cycle`; unrelated additive job fields remain preserved.
-- Reports retain residual blockers and distinguish pending, blocked, failed, and merge-ready states.
-- P2–P4 placeholder modules remain explicit `NotImplementedError` stubs until their issues land.
-
-Run:
-
-```bash
-cd python
-python -m pip install -e '.[test]'
-pytest
-```
-
-The required Qlty Cloud check is reproduced with `qlty check` from the repository root. Configuration lives in [`.qlty/qlty.toml`](.qlty/qlty.toml): `python/tests/**` is test code, Bandit B101/B108 are ignored only on test paths, and production Python Bandit analysis stays enabled.
-
-### Agent-skill review notes
-
-Skill text is a portable operator interface, not enforcement. Verify that it:
-
-- Calls the Python orchestrator and `wh` instead of bypassing them with direct mutations.
-- Does not promise unsupported host-platform capabilities.
-- Preserves deny-by-default merge behavior, the bounded primary-agent authorization protocol, worktree isolation, allowlist, stack order, and attribution rules.
-- Distinguishes implemented commands from planned commands.
-- Uses bounded, concrete worker prompts and reports unresolved work rather than hiding it.
 
 ## Review replies
 
