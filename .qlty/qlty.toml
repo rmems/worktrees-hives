@@ -4,18 +4,21 @@
 # Reproduce the Qlty Cloud PR check locally with:
 #   qlty check
 #
-# Division of labour, unchanged in spirit from the previous config: native CI
-# owns `cargo clippy`, `cargo fmt`, and `cargo test`. Qlty is NOT configured to
-# re-run clippy or rustfmt, because duplicating a blocking native gate produces
-# two sources of truth for the same finding and no new signal.
+# Division of labour: native CI owns `cargo clippy`, `cargo fmt`, and
+# `cargo test`. Qlty is deliberately NOT configured to re-run them, because
+# duplicating a blocking native gate produces two sources of truth for the same
+# finding and no new signal.
 #
-# What Qlty is here for instead:
-#   - actionlint: GitHub Actions correctness. Earned its place immediately --
-#     `release.yml` guarded every job on `python/Cargo.toml`, a file that never
-#     existed, so it silently produced no artifact for its entire life. That is
-#     exactly the class of defect actionlint catches and humans do not.
-#   - gitleaks: committed-secret detection.
-#   - Qlty's own structure smells, advisory only (see the triage block below).
+# No third-party plugin blocks are declared. `qlty plugins list` reports zero
+# available plugins in this checkout, so any plugin named here fails the whole
+# run with "Plugin definition not found" rather than being skipped -- which is
+# exactly how the first attempt at this file broke the build. Adding a plugin
+# (actionlint and gitleaks are the two worth having: actionlint would have
+# caught `release.yml` guarding every job on a `python/Cargo.toml` that never
+# existed) requires running `qlty plugins enable <name>` in an environment where
+# the plugin registry resolves, and committing whatever that writes.
+#
+# What remains active: Qlty's built-in structure smells, advisory only.
 
 config_version = "0"
 
@@ -46,12 +49,6 @@ exclude_patterns = [
   "**/testdata/**",
   "**/vendor/**",
 ]
-
-[[plugin]]
-name = "actionlint"
-
-[[plugin]]
-name = "gitleaks"
 
 # Structure-only Qlty smells. These are maintainability counts, not security or
 # correctness findings, and every current hit is on a coordination surface that
