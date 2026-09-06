@@ -298,9 +298,12 @@ qodana/
 
 .ai/
 
-# Qlty CLI runtime output (qlty check writes these into .qlty/)
-.qlty/logs/
-.qlty/out/
-.qlty/results/
-.qlty/plugin_cachedir/
-.qlty/tmp/
+# Qlty CLI runtime output. `qlty check` creates these inside .qlty/ as SYMLINKS
+# into ~/.qlty/cache, not as directories -- so the patterns must NOT have a
+# trailing slash. A trailing slash matches directories only, which is why four
+# machine-specific symlinks got committed before being caught in review.
+.qlty/logs
+.qlty/out
+.qlty/results
+.qlty/plugin_cachedir
+.qlty/tmp

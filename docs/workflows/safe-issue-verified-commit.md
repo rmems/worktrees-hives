@@ -43,7 +43,7 @@ Abort and report if any of these fail:
 2. Start from an up-to-date base. Never edit `main` or `master`.
 3. Create or reuse a dedicated branch and isolated worktree:
    - Required: `wh --json worktree create --schema-version 2 --repo <repo> --start-point <exact-commit-or-ref> <owner> <repo-name> <job-id> <branch>` (`WH_BIN` or `PATH`). Never omit the caller-selected boundary version/start point or derive it from the source checkout's ambient `HEAD`.
-   - If `wh` is missing, a platform-specific wrapper may call Git only after it has enforced: worktree root under the configured base, no path traversal, expected job branch, expected remote, owner allowlist from `WH_ALLOWED_OWNERS` or explicit API args, and assigned-worktree identity.
+   - If `wh` is missing, stop, unless a wrapper routes the mutation through `wh-core`'s allowlist and branch verification -- the same definition as the hard stop above. A wrapper that re-implements those checks itself and then calls `git` directly does **not** qualify: re-implemented policy is prompt-level text, not the code-enforced boundary, and the checks it would have to reproduce (sandbox root, path traversal, expected job branch, expected remote, `WH_ALLOWED_OWNERS`, assigned-worktree identity) are exactly what `wh-core` exists to own.
    - Raw `git worktree add` is forbidden on mutating runs.
 4. Suggested issue branch: `hive/issue-<n>-<short-slug>` (document any local override).
 5. For a newly created, unpublished assigned branch, fetch the intended remote base and prove that the branch equals that exact remote-base commit before edits. It may have no upstream only for this creation proof; never use an ambient or stale `HEAD` as the base.
