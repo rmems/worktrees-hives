@@ -1,0 +1,19 @@
+crates/wh-core/src/worktree.rs
+  s_a3ad7a38fa224d::t_51646fc5046be3 101-108
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "d3c76283503aaf5dbbc0cc1fe6eaaf4cc3e0abee",
+  "prompts": {},
+  "sessions": {
+    "s_a3ad7a38fa224d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db0515b1-1602-4f58-98b6-e4cdec47107c",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Raul Montoya Cardenas <montoyaraul34@gmail.com>"
+    }
+  }
+}
