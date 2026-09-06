@@ -1,0 +1,80 @@
+# Qlty baseline for the Rust-only workspace (restored after the Python removal
+# in #144, which deleted the pytest/Bandit-specific configuration).
+#
+# Reproduce the Qlty Cloud PR check locally with:
+#   qlty check
+#
+# Division of labour, unchanged in spirit from the previous config: native CI
+# owns `cargo clippy`, `cargo fmt`, and `cargo test`. Qlty is NOT configured to
+# re-run clippy or rustfmt, because duplicating a blocking native gate produces
+# two sources of truth for the same finding and no new signal.
+#
+# What Qlty is here for instead:
+#   - actionlint: GitHub Actions correctness. Earned its place immediately --
+#     `release.yml` guarded every job on `python/Cargo.toml`, a file that never
+#     existed, so it silently produced no artifact for its entire life. That is
+#     exactly the class of defect actionlint catches and humans do not.
+#   - gitleaks: committed-secret detection.
+#   - Qlty's own structure smells, advisory only (see the triage block below).
+
+config_version = "0"
+
+exclude_patterns = [
+  "*_min.*",
+  "*-min.*",
+  "*.min.*",
+  "**/.yarn/**",
+  "**/*.d.ts",
+  "**/assets/**",
+  "**/bower_components/**",
+  "**/build/**",
+  "**/cache/**",
+  "**/db/**",
+  "**/deps/**",
+  "**/dist/**",
+  "**/extern/**",
+  "**/external/**",
+  "**/generated/**",
+  "**/Godeps/**",
+  "**/gradlew/**",
+  "**/mvnw/**",
+  "**/node_modules/**",
+  "**/protos/**",
+  "**/seed/**",
+  "**/target/**",
+  "**/templates/**",
+  "**/testdata/**",
+  "**/vendor/**",
+]
+
+[[plugin]]
+name = "actionlint"
+
+[[plugin]]
+name = "gitleaks"
+
+# Structure-only Qlty smells. These are maintainability counts, not security or
+# correctness findings, and every current hit is on a coordination surface that
+# keeps its explicit request/error shape on purpose: `worktree.rs` carries the
+# exact-base creation contract and `main.rs` carries the CLI-to-core mapping.
+#
+# Kept as `comment` rather than deleted, so the counts stay visible on a PR
+# without gating it. Per AGENTS.md, an external analyzer is advisory until a
+# finding is reproduced.
+[smells.function_parameters]
+enabled = false
+
+[smells.file_complexity]
+enabled = false
+
+[smells.return_statements]
+enabled = false
+
+[[triage]]
+match.rules = [
+  "qlty:function-parameters",
+  "qlty:file-complexity",
+  "qlty:return-statements",
+]
+set.ignored = true
+set.mode = "comment"

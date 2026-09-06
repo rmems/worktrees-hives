@@ -1,6 +1,6 @@
 # worktrees-hives Skill
 
-Installable agent skill for the worktrees-hives hybrid orchestrator.
+Installable agent skill for the worktrees-hives Rust enforcement core.
 
 [`AGENTS.md`](AGENTS.md) is the authoritative repository contribution and autonomy contract. This portable skill supplies platform-neutral procedures and must not broaden or relax that policy.
 

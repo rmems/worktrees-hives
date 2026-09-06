@@ -17,7 +17,12 @@ Measured on 33,596 agent pull requests across 2,807 repositories ([arXiv:2607.04
 
 Claude Code agent teams have real coordination and [documented zero isolation](https://code.claude.com/docs/en/agent-teams): "two teammates editing the same file leads to overwrites." `/batch` and Cursor have real isolation and no coordination. The two never co-occur, and nothing in either column enforces safe integration.
 
-`writ` fills that gap. It does not assign work and does not create worktrees. It **admits writes**.
+`writ` fills that gap. It does not assign work. It **admits writes**.
+
+> [!NOTE]
+> **Status: the enforcement core is real; the hook layer is not built yet.**
+> Shipping today are the `git`/`gh` allowlists, exact-base worktree verification, path sandboxing, process supervision, and the absence of any merge path — reachable through the `wh` CLI, including `wh worktree create`, which remains supported.
+> Not yet built: the `PreToolUse`/`WorktreeCreate` hook dispatcher, `wh install`, and the SQLite lease store. Those are milestone **M1** ([#124](https://github.com/rmems/writ/issues/124)). Until they land, enforcement applies only to commands routed through `wh` deliberately — it is **opt-in, not unbypassable**.
 
 ## Architecture
 
@@ -31,15 +36,15 @@ Two layers, one binary.
 
 Leases are the join: coordination state that the enforcement layer checks at write time.
 
-### Why hooks
+### Why hooks (planned — M1)
 
-Enforcement runs as [Claude Code hooks](https://code.claude.com/docs/en/hooks), which is what makes it unbypassable rather than advisory:
+Enforcement is designed to run as [Claude Code hooks](https://code.claude.com/docs/en/hooks). None of the hooks below are registered yet: `.claude/settings.json` currently registers only `SessionStart` and `PreCompact`. This section states the target design and the contract it relies on, not current behavior.
 
 - **`PreToolUse`** — "Exit 2 means a blocking error… exit 2 blocks whether or not you print JSON: even a JSON `permissionDecision` of `allow` can't override it."
 - **`WorktreeCreate`** — "Any non-zero exit code aborts worktree creation." This is the lease-admission seam.
 - **`WorktreeRemove`**, **`SubagentStart`/`SubagentStop`** — lease release and agent registry.
 
-This inverts the usual failure mode. Safety is normally opt-in: a tool must be *called* to help. As a hook, it applies whether or not the agent cooperates.
+This inverts the usual failure mode. Safety is normally opt-in: a tool must be *called* to help — which is exactly the position `writ` is in today. Once registered as a hook, it will apply regardless of whether the agent cooperates. That gap is the point of M1, and it is the honest reason the "unbypassable" property is described here as a design goal rather than a current guarantee.
 
 ## Safety invariants
 

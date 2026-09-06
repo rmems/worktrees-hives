@@ -137,7 +137,7 @@ For authorized implementation, complete the cohesive tranche: run focused gates 
 worktrees-hives is a **Rust workspace**. One binary owns both layers:
 
 - **Enforcement** — git worktrees, exact-base identity, path sandboxing, process supervision/timeouts, and **hard safety enforcement** (no runtime merge path, force-with-lease only, branch verification).
-- **Coordination state** — agents, leases with path scopes, ownership, and freeze modes, in a single SQLite file derived from `git`/`gh`/disk rather than transcribed.
+- **Coordination state** *(planned, M1)* — agents, leases with path scopes, ownership, and freeze modes, in a single SQLite file derived from `git`/`gh`/disk rather than transcribed. Not implemented: today `state.rs` only *reads* `watched.json`, no writer exists, and worktree creation records no lease.
 - **Agent skill (`SKILL.md`)** — portable prompts describing when and how agents call the CLI on any platform.
 
 ```text
@@ -181,12 +181,14 @@ The installable `SKILL.md` will own platform-facing prompts and command guidance
 
 ## Data flow
 
+**Supported today.** Steps 3, 5, and 6 below describe the M1 target; the hook dispatcher does not exist yet. What works now is the same enforcement reached explicitly: `wh worktree create` for exact-base creation, and `wh git-safe` / `wh gh-safe` / `wh supervisor` for validated mutation and supervised execution.
+
 1. The operator or agent supplies GitHub or Linear issue/PR context.
-2. The harness (Claude Code agent teams, `/batch`, or an equivalent) assigns work and creates an isolated worktree.
-3. On `WorktreeCreate`, Rust verifies the exact start point and identity of a worktree it did not create, and records the lease. A non-zero exit aborts creation.
+2. The harness (Claude Code agent teams, `/batch`, or an equivalent) assigns work and creates an isolated worktree — or `wh worktree create` does, which is the supported path today.
+3. *(M1)* On `WorktreeCreate`, Rust verifies the exact start point and identity of a worktree it did not create, and records the lease. A non-zero exit aborts creation.
 4. A worker agent changes only that worktree and branch.
-5. On `PreToolUse`, Rust validates each `git`/`gh` mutation and blocks an unsafe one with exit 2, which no other hook can override.
-6. On `WorktreeRemove`, the lease is released.
+5. *(M1)* On `PreToolUse`, Rust validates each `git`/`gh` mutation and blocks an unsafe one with exit 2, which no other hook can override. Until then, validation happens only when `wh git-safe` / `wh gh-safe` is invoked.
+6. *(M1)* On `WorktreeRemove`, the lease is released.
 7. The installed companion `babysit-pr` skill handles interactive monitoring after a PR handoff.
 8. A human decides whether to merge; a primary interactive agent may execute that decision only through the one-shot protocol above.
 
