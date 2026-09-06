@@ -1,0 +1,19 @@
+.qlty/qlty.toml
+  s_a3ad7a38fa224d::t_ee8473bd3262b3 61-78,88-96,102-104
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "6e12061947a964c4ed46340ea72bc135100ee30e",
+  "prompts": {},
+  "sessions": {
+    "s_a3ad7a38fa224d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db0515b1-1602-4f58-98b6-e4cdec47107c",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Raul Montoya Cardenas <montoyaraul34@gmail.com>"
+    }
+  }
+}
