@@ -1,0 +1,19 @@
+.codacy.yml
+  s_a3ad7a38fa224d::t_233e3397bb1536 25-30
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "b8fdb2a7d104661eda76ea8802e93e51b7afc7e8",
+  "prompts": {},
+  "sessions": {
+    "s_a3ad7a38fa224d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db0515b1-1602-4f58-98b6-e4cdec47107c",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Raul Montoya Cardenas <montoyaraul34@gmail.com>"
+    }
+  }
+}
