@@ -1,0 +1,19 @@
+.qlty/out
+  ai_agent 1
+.qlty/results
+  ai_agent 1
+.github/workflows/qodana_code_quality.yml
+  ai_agent 67-72
+.qlty/logs
+  ai_agent 1
+SKILL.md
+  ai_agent 27
+.qlty/plugin_cachedir
+  ai_agent 1
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "f84dd8fdf395516b745b9e248742b0cdd557f9d4",
+  "prompts": {}
+}
