@@ -1,0 +1,35 @@
+.qlty/qlty.toml
+  s_a3ad7a38fa224d::t_aaa94fc017b724 1-80
+.github/workflows/qodana_code_quality.yml
+  s_a3ad7a38fa224d::t_28d4600bfbe5ee 1-70
+qodana.yaml
+  s_a3ad7a38fa224d::t_28d4600bfbe5ee 1-21
+docs/workflows/safe-issue-verified-commit.md
+  s_a3ad7a38fa224d::t_920a241b6b3bf1 26
+SKILL.md
+  s_a3ad7a38fa224d::t_920a241b6b3bf1 3
+.codacy.yml
+  s_a3ad7a38fa224d::t_28d4600bfbe5ee 1-54
+AGENTS.md
+  s_a3ad7a38fa224d::t_920a241b6b3bf1 140,184-185,187-188,190-191
+README.md
+  s_a3ad7a38fa224d::t_920a241b6b3bf1 20-25,39,41,47
+REVIEW.md
+  s_a3ad7a38fa224d::t_920a241b6b3bf1 63
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "428fc8d05285ff2b3644df111dd37cdacc9f00b5",
+  "prompts": {},
+  "sessions": {
+    "s_a3ad7a38fa224d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db0515b1-1602-4f58-98b6-e4cdec47107c",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Raul Montoya Cardenas <montoyaraul34@gmail.com>"
+    }
+  }
+}
