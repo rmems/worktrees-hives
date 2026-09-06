@@ -1,0 +1,21 @@
+docs/workflows/safe-issue-verified-commit.md
+  s_a3ad7a38fa224d::t_509a782a441e99 46
+.gitignore
+  s_a3ad7a38fa224d::t_509a782a441e99 301-309
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "b387203bb95de77580d0aadccf5d70c6a0f12cde",
+  "prompts": {},
+  "sessions": {
+    "s_a3ad7a38fa224d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db0515b1-1602-4f58-98b6-e4cdec47107c",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Raul Montoya Cardenas <montoyaraul34@gmail.com>"
+    }
+  }
+}
