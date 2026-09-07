@@ -59,12 +59,16 @@ These apply to every agent, platform, and command path:
 
 Soft prompt text is not runtime enforcement. Hard stops live in Rust, at the binary boundary, where a malformed prompt cannot bypass them.
 
-## Owner allowlist
+## Owner allowlist — not currently enforced
 
-Repository access is controlled by a **configured owner allowlist**, not a built-in org list.
+> [!WARNING]
+> **`WH_ALLOWED_OWNERS` has no reader anywhere under `crates/`.** It was enforced in the Python layer this repository just removed, so owner scoping is presently a stated requirement with no code behind it. Do not rely on it as an access control. Tracked in [#146](https://github.com/rmems/writ/issues/146).
 
+The intended contract, for when enforcement lands:
+
+- Repository access is controlled by a configured owner allowlist, not a built-in org list.
 - Set `WH_ALLOWED_OWNERS=acme,example-org` (comma-separated), or pass explicit owners at the API boundary.
-- Empty configuration means multi-owner discovery does nothing until an operator configures scope.
+- An empty allowlist denies multi-owner operations rather than permitting them.
 
 Examples use generic owners such as `acme` and `example-org`.
 
