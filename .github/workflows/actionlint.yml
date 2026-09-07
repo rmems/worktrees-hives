@@ -19,6 +19,12 @@
 # through a third-party action, matching how the rest of this directory
 # SHA-pins what it runs. Bump both values together; the published list is at
 # https://github.com/rhysd/actionlint/releases
+#
+# Asset naming, since a version bump has to get it right: the Linux x86-64
+# archive is `actionlint_<version>_linux_amd64.tar.gz` -- `amd64`, not
+# `x86_64`. Both the name and the digest below were taken from the release's
+# own `actionlint_1.7.12_checksums.txt` and exercised end to end before this
+# landed.
 
 name: Workflow lint
 
