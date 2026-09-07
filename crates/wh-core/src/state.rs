@@ -1,8 +1,15 @@
 //! Watched-job state: **read path only**.
 //!
 //! There is no writer. This module exposes `load_jobs` and nothing that
-//! persists, so `wh status` and `wh jobs` return an empty array in every real
-//! invocation -- the file they read is never created by this workspace.
+//! persists, so nothing in this workspace ever creates `watched.json`. With the
+//! file absent -- the normal case -- `wh status` and `wh jobs` return an empty
+//! array.
+//!
+//! That is not the same as "always empty". `load_jobs_from` returns an empty vec
+//! only on `NotFound`; a file that does exist at the resolved path is parsed and
+//! returned as-is. So populated output is reachable when something outside this
+//! workspace writes the file, or when `WH_STATE_PATH` points at one. The gap is
+//! the missing writer, not a guarantee about the value.
 //!
 //! GitHub #26 ("R3: Job/state store") is closed as completed and an earlier
 //! version of this comment claimed it implemented the store. It delivered the
@@ -22,8 +29,9 @@ use crate::status::JobStatus;
 
 /// Return all currently watched jobs from the persisted store.
 ///
-/// Returns `Ok(vec![])` when the state file does not exist -- which is the
-/// only outcome in practice, since nothing in this workspace writes the file.
+/// Returns `Ok(vec![])` only when the state file does not exist, which is the
+/// normal case because nothing in this workspace creates it. An existing,
+/// well-formed file is parsed and its jobs returned unchanged.
 /// Returns `Err` when the file exists but cannot be read or parsed,
 /// so callers can surface the failure instead of silently masking it.
 ///
