@@ -1,6 +1,18 @@
-//! Durable watched-job state and atomic persistence.
+//! Watched-job state: **read path only**.
 //!
-//! The `watched.json` store is implemented by GitHub #26.
+//! There is no writer. This module exposes `load_jobs` and nothing that
+//! persists, so `wh status` and `wh jobs` return an empty array in every real
+//! invocation -- the file they read is never created by this workspace.
+//!
+//! GitHub #26 ("R3: Job/state store") is closed as completed and an earlier
+//! version of this comment claimed it implemented the store. It delivered the
+//! reader and the serde types; the persistence path never landed. The claim is
+//! corrected here rather than left implying a writer exists somewhere.
+//!
+//! This module is superseded rather than completed: the SQLite lease store in
+//! GitHub #124 replaces it, with crash consistency tracked in #136. Do not add a
+//! `watched.json` writer without checking whether the lease store should own the
+//! state instead.
 
 use std::fs;
 use std::path::Path;
@@ -10,10 +22,10 @@ use crate::status::JobStatus;
 
 /// Return all currently watched jobs from the persisted store.
 ///
-/// Returns `Ok(vec![])` when the state file does not exist.
+/// Returns `Ok(vec![])` when the state file does not exist -- which is the
+/// only outcome in practice, since nothing in this workspace writes the file.
 /// Returns `Err` when the file exists but cannot be read or parsed,
 /// so callers can surface the failure instead of silently masking it.
-/// Persistence write path is implemented by GitHub #26.
 ///
 /// Path resolution honours `WH_STATE_PATH` via [`crate::paths::state_path`].
 pub fn load_jobs() -> Result<Vec<JobStatus>, String> {

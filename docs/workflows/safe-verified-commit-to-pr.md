@@ -4,7 +4,7 @@ Portable worker contract for any coding agent. Runs **after** [Safe Issue → Ve
 
 Safety rules live in [`AGENTS.md`](../../AGENTS.md), [`SKILL.md`](../../SKILL.md), and [`REVIEW.md`](../../REVIEW.md). This file does not relax them.
 
-Contract: Issue → PR [#8](https://github.com/rmems/worktrees-hives/issues/8) / Linear [RM-123](https://linear.app/rpd-34/issue/RM-123/issue-pr-workflow-never-auto-merge). Isolation prerequisite [#6](https://github.com/rmems/worktrees-hives/issues/6). Interactive monitoring, when needed after handoff, belongs to the installed companion `babysit-pr` skill rather than this workflow.
+Contract: Issue → PR [#8](https://github.com/rmems/writ/issues/8) / Linear [RM-123](https://linear.app/rpd-34/issue/RM-123/issue-pr-workflow-never-auto-merge). Isolation prerequisite [#6](https://github.com/rmems/writ/issues/6). Interactive monitoring, when needed after handoff, belongs to the installed companion `babysit-pr` skill rather than this workflow.
 
 ## Inputs
 

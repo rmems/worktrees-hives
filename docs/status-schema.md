@@ -1,6 +1,16 @@
 # Status JSON Schema
 
-This document defines the JSON schema emitted by `wh status --json` and `wh jobs --json`. These commands let agent platforms query the state of watched jobs.
+> [!WARNING]
+> **Both commands always return an empty `jobs` array today.** `crates/wh-core/src/state.rs` has a read path and no writer, so the `watched.json` file this schema describes is never created by this workspace. Verified:
+>
+> ```console
+> $ wh --json status
+> {"ok":true,"schema_version":1,"command":"cli.status","data":{"jobs":[]},"error":null}
+> ```
+>
+> The envelope and field contract below are real and worth honouring by anything that consumes the output. The *content* is not populated. The store is superseded rather than unfinished: the SQLite lease store in [#124](https://github.com/rmems/writ/issues/124) replaces it, with crash consistency in [#136](https://github.com/rmems/writ/issues/136).
+
+This document defines the JSON schema emitted by `wh status --json` and `wh jobs --json`.
 
 ## Envelope
 

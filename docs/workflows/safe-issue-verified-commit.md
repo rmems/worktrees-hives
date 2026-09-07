@@ -4,7 +4,7 @@ Portable worker contract for any coding agent (Codex, Claude, Grok, Hermes, Devi
 
 Safety rules live in [`AGENTS.md`](../../AGENTS.md) and [`SKILL.md`](../../SKILL.md). This file does not relax them.
 
-Contracts: isolation [#6](https://github.com/rmems/worktrees-hives/issues/6), skill/procedure [#84](https://github.com/rmems/worktrees-hives/issues/84).
+Contracts: isolation [#6](https://github.com/rmems/writ/issues/6), skill/procedure [#84](https://github.com/rmems/writ/issues/84).
 
 ## Inputs
 
