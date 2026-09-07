@@ -1,0 +1,10 @@
+{
+  "ok": false,
+  "schema_version": 2,
+  "command": "worktree.create",
+  "data": {},
+  "error": {
+    "code": "START_POINT_REQUIRED",
+    "message": "worktree.create schema v2 requires an explicit --start-point"
+  }
+}
