@@ -1,0 +1,21 @@
+crates/writ-core/src/state.rs
+  s_a3ad7a38fa224d::t_5aa52a7255f2c1 5,11
+docs/status-schema.md
+  ai_agent 11
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "2645b0fe41b0f945abf82f233f30001170f5e820",
+  "prompts": {},
+  "sessions": {
+    "s_a3ad7a38fa224d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db0515b1-1602-4f58-98b6-e4cdec47107c",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Raul Montoya Cardenas <montoyaraul34@gmail.com>"
+    }
+  }
+}
