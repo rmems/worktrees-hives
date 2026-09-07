@@ -1,0 +1,19 @@
+crates/writ-core/src/identity.rs
+  s_aa6820ff724056::t_396559761cfcd2 192-386
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "e48537b08f7801e4e8c6f84a932765799ab31a47",
+  "prompts": {},
+  "sessions": {
+    "s_aa6820ff724056": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "311c21ab-a44b-475d-9238-b2e75fd08405",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Raul Montoya Cardenas <montoyaraul34@gmail.com>"
+    }
+  }
+}
