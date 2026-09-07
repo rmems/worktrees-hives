@@ -1,0 +1,11 @@
+README.md
+  ai_agent 65
+docs/workflows/safe-issue-verified-commit.md
+  ai_agent 24
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "de62c7c251b84f67db369ed93bf7e716aad13548",
+  "prompts": {}
+}
