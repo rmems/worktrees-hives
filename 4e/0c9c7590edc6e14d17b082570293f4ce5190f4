@@ -1,0 +1,19 @@
+.github/codecov.yml
+  s_43736fda7c8434::t_d28bac0d693637 1-14,16-20,24-26,30-34,38-43
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "4e0c9c7590edc6e14d17b082570293f4ce5190f4",
+  "prompts": {},
+  "sessions": {
+    "s_43736fda7c8434": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b9b899fb-1bf0-4b3f-a2fc-a6363915e78f",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Raul Montoya Cardenas <montoyaraul34@gmail.com>"
+    }
+  }
+}
