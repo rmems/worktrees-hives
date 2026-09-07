@@ -1,0 +1,21 @@
+crates/writ-core/src/worktree.rs
+  s_aa6820ff724056::t_65dbfc14e1555a 1430-1459
+  s_aa6820ff724056::t_f88b197c18c0a0 33-36
+  s_aa6820ff724056::t_6ff7b5f67c4130 218-228,232-238
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "2977eaede3d60ee59bf7fab8b12d1606040eff5a",
+  "prompts": {},
+  "sessions": {
+    "s_aa6820ff724056": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "311c21ab-a44b-475d-9238-b2e75fd08405",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Raul Montoya Cardenas <montoyaraul34@gmail.com>"
+    }
+  }
+}
