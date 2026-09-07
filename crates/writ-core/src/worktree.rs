@@ -30,6 +30,10 @@ pub struct Worktree {
     /// The branch name associated with this worktree.
     pub branch: String,
     /// The repository root this worktree is linked to.
+    ///
+    /// Empty only when the link could not be read — a stale or broken worktree
+    /// during a listing. Treat an empty path as "undetermined", never as a real
+    /// root, and never compare it for equality with one.
     pub repo_root: PathBuf,
     /// Fully resolved start commit for a creation result; absent from discovery-only listings.
     pub start_commit: Option<String>,
@@ -211,12 +215,27 @@ impl WorktreeManager {
                     let branch = get_worktree_branch(&job_entry.path())
                         .unwrap_or_else(|_| "unknown".to_string());
 
+                    // Resolve the linked repository so a listed worktree carries
+                    // the identity its field documents. This previously pushed
+                    // `PathBuf::new()`, which is not "unknown" -- it is an empty
+                    // path that compares unequal to every real root, so a caller
+                    // could not tell a listing apart from a worktree linked to
+                    // nowhere. An empty path is still the fallback when the link
+                    // cannot be read, but it is now the exception rather than
+                    // every row.
+                    let repo_root =
+                        find_repo_root_for_worktree(&job_entry.path()).unwrap_or_default();
+
                     worktrees.push(Worktree {
                         path: job_entry.path(),
                         branch,
-                        repo_root: PathBuf::new(), // Not tracked in list
-                        start_commit: None,        // Not tracked in list
-                        head_commit: None,         // Not tracked in list
+                        repo_root,
+                        // Genuinely absent from a listing, as the field docs
+                        // state: the creation-time start point is not persisted
+                        // anywhere, and HEAD verification is a creation-result
+                        // property. Left `None` rather than invented.
+                        start_commit: None,
+                        head_commit: None,
                     });
                 }
             }
@@ -1405,6 +1424,37 @@ mod tests {
             .unwrap();
         fs::remove_dir_all(&wt.path).unwrap();
         harness.manager.prune(&harness.repo_root).unwrap();
+    }
+
+    #[test]
+    fn listed_worktrees_carry_their_repository_root() {
+        let harness = Harness::sha1();
+        let start_commit = harness.head();
+        let wt = harness
+            .create("job-list", "feature/list-identity", &start_commit)
+            .unwrap();
+
+        let listed = harness.manager.list().unwrap();
+        let found = listed
+            .iter()
+            .find(|w| w.path == wt.path)
+            .expect("created worktree must appear in the listing");
+
+        // The regression: this used to be `PathBuf::new()` for every row, so a
+        // listed worktree could not be matched back to its repository.
+        assert!(
+            !found.repo_root.as_os_str().is_empty(),
+            "listed worktree must carry a repository root"
+        );
+        assert_eq!(
+            found.repo_root.canonicalize().unwrap(),
+            harness.repo_root.canonicalize().unwrap(),
+            "listed repo_root must be the repository the worktree is linked to"
+        );
+
+        // Still absent by design, per the field documentation.
+        assert!(found.start_commit.is_none());
+        assert!(found.head_commit.is_none());
     }
 
     #[test]
