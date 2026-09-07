@@ -131,7 +131,7 @@ impl WorktreeManager {
         let start_point = StartPoint(request.start_point);
         validate_worktree_branch(branch)?;
         let base = self.base_path()?;
-        validate_repo_root(request.repo_root)?;
+        validate_repo_root(request.repo_root, "add")?;
 
         // Resolve the caller-selected start point before any mutation. Appending
         // ^{commit} rejects trees/blobs and peels annotated tags to commits.
@@ -275,7 +275,21 @@ impl WorktreeManager {
     }
 
     /// Prune worktree administrative files (stale entries).
+    ///
+    /// `repo_root` must be a git repository. It is **not** required to sit
+    /// inside the configured worktree base: the base holds worktrees, while the
+    /// repository being pruned lives outside it by design. So this is a
+    /// precondition check, not a sandbox check — the operation mutates
+    /// administrative state in whatever repository it is pointed at, and the
+    /// caller is responsible for choosing that repository.
+    ///
+    /// Validating here brings `prune` to parity with [`Self::create_with_request`],
+    /// which has always called `validate_repo_root`. `prune` previously spawned
+    /// `git` against an unchecked path, so a typo or a non-repository directory
+    /// surfaced as raw git stderr instead of a typed error.
     pub fn prune(&self, repo_root: &Path) -> Result<()> {
+        validate_repo_root(repo_root, "prune")?;
+
         let output = Command::new("git")
             .arg("-C")
             .arg(repo_root)
@@ -333,7 +347,17 @@ fn prepare_worktree_path(
     Ok(worktree_path)
 }
 
-fn validate_repo_root(repo_root: &Path) -> Result<()> {
+/// Reject a `repo_root` that is not a git repository.
+///
+/// `op` names the calling `git worktree` subcommand so the error reports the
+/// operation actually refused. It was hardcoded to `add`, which misattributed
+/// the failure as soon as a second caller existed.
+///
+/// This proves the path *is a repository*; it deliberately does not apply
+/// [`is_within_base`]. Repository roots legitimately live outside the configured
+/// worktree base — the base holds worktrees, not repositories — so a containment
+/// check here would reject every ordinary invocation.
+fn validate_repo_root(repo_root: &Path, op: &str) -> Result<()> {
     if repo_root.join(".git").exists() {
         return Ok(());
     }
@@ -341,7 +365,7 @@ fn validate_repo_root(repo_root: &Path) -> Result<()> {
         return Ok(());
     }
     Err(Error::GitCommand {
-        args: vec!["worktree".into(), "add".into()],
+        args: vec!["worktree".into(), op.into()],
         stderr: format!("not a git repository: {}", repo_root.display()),
     })
 }
@@ -1381,6 +1405,57 @@ mod tests {
             .unwrap();
         fs::remove_dir_all(&wt.path).unwrap();
         harness.manager.prune(&harness.repo_root).unwrap();
+    }
+
+    #[test]
+    fn prune_rejects_path_that_is_not_a_repository() {
+        let harness = Harness::sha1();
+        let not_a_repo = harness.temp_path().join("not-a-repo");
+        fs::create_dir_all(&not_a_repo).unwrap();
+
+        let err = harness
+            .manager
+            .prune(&not_a_repo)
+            .expect_err("prune must refuse a non-repository path");
+
+        match err {
+            Error::GitCommand { args, stderr } => {
+                // The operation must be reported as `prune`, not `add`: the
+                // shared validator used to hardcode `add` for every caller.
+                assert_eq!(args, vec!["worktree".to_owned(), "prune".to_owned()]);
+                // Exact equality on purpose. Git *also* refuses a non-repository
+                // and its own stderr contains "not a git repository", so a
+                // `contains` assertion here passes with or without the
+                // precondition and proves nothing -- the first version of this
+                // test did exactly that. Only the precondition produces this
+                // exact string, with no `fatal:` prefix and the full path.
+                assert_eq!(
+                    stderr,
+                    format!("not a git repository: {}", not_a_repo.display()),
+                    "expected the precondition message, not git's own"
+                );
+            }
+            other => panic!("expected GitCommand error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn create_reports_add_as_the_refused_operation() {
+        let harness = Harness::sha1();
+        let not_a_repo = harness.temp_path().join("create-not-a-repo");
+        fs::create_dir_all(&not_a_repo).unwrap();
+
+        let err = harness
+            .manager
+            .create(&not_a_repo, "acme", "demo", "job-op", "feature/op", "HEAD")
+            .expect_err("create must refuse a non-repository path");
+
+        match err {
+            Error::GitCommand { args, .. } => {
+                assert_eq!(args, vec!["worktree".to_owned(), "add".to_owned()]);
+            }
+            other => panic!("expected GitCommand error, got {other:?}"),
+        }
     }
 
     #[test]
