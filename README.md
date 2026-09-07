@@ -3,7 +3,7 @@
 A Rust safety core for coding-agent fleets: exact-base worktree verification, `git`/`gh` mutation allowlists, path sandboxing, process containment, and **no runtime merge path at all**.
 
 > [!IMPORTANT]
-> **This repository is mid-pivot.** It is becoming **`writ`** — the enforcement and admission-control layer for agent fleets. See [#1](https://github.com/rmems/worktrees-hives/issues/1) for the product epic and [#124](https://github.com/rmems/worktrees-hives/issues/124) for the current phase. The crate is still named `wh`; the rename is tracked under milestone M2.
+> **This repository is mid-pivot.** It is becoming **`writ`** — the enforcement and admission-control layer for agent fleets. See [#1](https://github.com/rmems/writ/issues/1) for the product epic and [#124](https://github.com/rmems/writ/issues/124) for the current phase. The crate is still named `wh`; that rename is tracked under milestone M2. The GitHub repository rename has already landed.
 
 ## What this is for
 
@@ -31,10 +31,10 @@ Two layers, one binary.
 | Layer | Owns | Does not own |
 | --- | --- | --- |
 | **Enforcement** (per-repo) | Exact base, branch/path identity, path sandbox, git/gh allowlists, no merge path, force-with-lease only, process containment | Which agent does what |
-| **Coordination state** (cross-repo) | Agents, leases with path scopes, ownership, blockers, freeze modes. SQLite, single file, derived from `git`/`gh`/disk | Task decomposition or scheduling |
+| **Coordination state** (cross-repo) *(planned, M1)* | Agents, leases with path scopes, ownership, blockers, freeze modes. SQLite, single file, derived from `git`/`gh`/disk. Not implemented yet | Task decomposition or scheduling |
 | `git`, `gh`, OS | Version-control, GitHub, and process primitives, invoked through allowlists | Policy |
 
-Leases are the join: coordination state that the enforcement layer checks at write time.
+Leases are intended to be the join: coordination state that the enforcement layer will check at write time. No lease store exists yet (M1).
 
 ### Why hooks (planned — M1)
 
@@ -94,8 +94,8 @@ cargo test --workspace
 - [`REVIEW.md`](REVIEW.md) — pull-request lifecycle and review checklist
 - [`docs/workflows/safe-issue-verified-commit.md`](docs/workflows/safe-issue-verified-commit.md) — issue → verified push
 - [`docs/workflows/safe-verified-commit-to-pr.md`](docs/workflows/safe-verified-commit-to-pr.md) — verified push → PR handoff (never merges)
-- Product epic: [#1](https://github.com/rmems/worktrees-hives/issues/1) · Current phase: [#124](https://github.com/rmems/worktrees-hives/issues/124)
-- Threat model: [#22](https://github.com/rmems/worktrees-hives/issues/22) · Boundary contract tests: [#81](https://github.com/rmems/worktrees-hives/issues/81)
+- Product epic: [#1](https://github.com/rmems/writ/issues/1) · Current phase: [#124](https://github.com/rmems/writ/issues/124)
+- Threat model: [#22](https://github.com/rmems/writ/issues/22) · Boundary contract tests: [#81](https://github.com/rmems/writ/issues/81)
 - [Linear `worktrees-hives` project](https://linear.app/rpd-34/project/worktrees-hives-e3052de4caa3)
 
 ## License

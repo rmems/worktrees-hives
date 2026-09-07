@@ -159,7 +159,7 @@ git / gh / operating system
 | Layer | Responsibilities |
 | --- | --- |
 | Agent skill | Describe when to discover work, spawn subagents, and report results. The installed companion `babysit-pr` skill handles interactive PR monitoring. Prompt content is portable guidance, not a security boundary. |
-| Rust core and CLI | Resolve sandboxed paths, verify worktrees it did not create, hold lease state, supervise child processes, verify branches, and reject unsafe git/GitHub operations. |
+| Rust core and CLI | Today: resolve sandboxed paths, supervise child processes, verify branches, and reject unsafe git/GitHub operations. Planned *(M1)*: verify worktrees it did not create, and hold lease state. |
 | External tools | Runtime `git` and `gh` operations are selected and validated by Rust. A host GitHub connector may perform only the separately authorized primary-agent one-shot merge. The OS supplies filesystem and process primitives. |
 
 **Why enforce at the hook boundary?** A tool that must be *called* to help is advisory: an agent that does not call it is unconstrained. As a `PreToolUse` hook, enforcement applies to the agent's own commands whether or not the agent cooperates, and a blocking exit cannot be overridden by another hook. Hard stops live in Rust, at the binary boundary, so a malformed prompt cannot bypass them.

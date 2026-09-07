@@ -37,6 +37,12 @@ engines:
     exclude_paths:
       - "crates/*/tests/**"
       - "**/target/**"
+  # `supervisor.rs` is deliberately absent from these three engine blocks even
+  # though the sibling `.qlty/qlty.toml` records complexity findings there.
+  # Codacy has not reproduced any, and Codacy passes on this PR. Per AGENTS.md an
+  # analyzer finding is advisory until reproduced, so this exclusion list tracks
+  # what actually fired rather than pre-empting what might. Add
+  # `crates/*/src/supervisor.rs` if Codacy ever reports it.
   complexity:
     exclude_paths:
       - "crates/*/tests/**"

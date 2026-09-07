@@ -1,6 +1,6 @@
 # Status JSON Schema
 
-This document defines the JSON schema emitted by `wh status --json` and `wh jobs --json`. These commands allow Python orchestrators and agent platforms to query the state of watched worktree-hives jobs.
+This document defines the JSON schema emitted by `wh status --json` and `wh jobs --json`. These commands let agent platforms query the state of watched jobs.
 
 ## Envelope
 

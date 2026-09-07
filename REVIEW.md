@@ -60,7 +60,7 @@ Rust owns the hard safety boundary. Reviewers should check:
 - Branch verification occurs immediately before mutation to reduce time-of-check/time-of-use risk.
 - Canonicalization and component checks prevent `..`, symlink, or prefix-based path escape.
 - State writes use a temporary file and atomic replacement without leaving partial JSON.
-- Process timeouts terminate and reap children. This is implemented in `supervisor.rs` (wall-clock timeout inclusive of permit wait, process-group kill on drop, wrapper/interpreter rejection); changes to it require timeout and reaping tests, not a deferral.
+- Process timeouts terminate and reap children. This is implemented in `supervisor.rs` (wall-clock timeout inclusive of permit wait, process-group kill on drop on Unix -- Windows kills only the direct child, per the `supervisor.rs` platform notes -- and wrapper/interpreter rejection); changes to it require timeout and reaping tests, not a deferral.
 - Public error codes are stable enough for callers to classify without parsing prose.
 - Unsafe Rust remains forbidden unless a separately reviewed design justifies it.
 

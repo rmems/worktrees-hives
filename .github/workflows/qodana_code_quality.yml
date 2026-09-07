@@ -34,6 +34,7 @@ on:
       - "crates/**"
       - "Cargo.toml"
       - "Cargo.lock"
+      - "rust-toolchain.toml"
       - "qodana.yaml"
       - ".github/workflows/qodana_code_quality.yml"
 
@@ -69,7 +70,22 @@ jobs:
           # image as `qodana.yaml`. `--linter` overrides the file, so passing a
           # bare `qodana-rust` here would silently defeat the pin and resolve an
           # untagged EAP linter.
-          args: --linter jetbrains/qodana-rust:2026.1-eap --within-docker=false
-          upload-result: true
+          #
+          # No `--within-docker=false`. That flag was a Python-era carryover: it
+          # paired with a host interpreter from setup-python, which this PR
+          # deletes. Running `qodana-rust` outside Docker would analyse the
+          # runner's ambient toolchain instead of the pinned image -- defeating
+          # the pin the line above exists to protect.
+          args: --linter jetbrains/qodana-rust:2026.1-eap
+          # Upload only from the trusted push path, for the same reason the
+          # token is scoped below.
+          upload-result: ${{ github.event_name == 'push' }}
         env:
-          QODANA_TOKEN: ${{ secrets.QODANA_TOKEN }}
+          # Scoped to push on main/releases only. `workflow_dispatch` can target
+          # ANY branch, so giving it the token would let an unreviewed branch
+          # consume an Ultimate-licensed scan and publish results into the Qodana
+          # Cloud project, polluting run history and baselines. The previous
+          # configuration documented this restriction explicitly; an earlier
+          # revision of this file dropped it by applying the secret
+          # unconditionally.
+          QODANA_TOKEN: ${{ (github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/releases/'))) && secrets.QODANA_TOKEN || '' }}

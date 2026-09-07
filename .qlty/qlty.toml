@@ -18,7 +18,8 @@
 # existed) requires running `qlty plugins enable <name>` in an environment where
 # the plugin registry resolves, and committing whatever that writes.
 #
-# What remains active: Qlty's built-in structure smells, advisory only.
+# Qlty's built-in structure smells are SUPPRESSED, not advisory -- see the
+# block near the end of this file for the count and how to see them locally.
 
 config_version = "0"
 
@@ -69,11 +70,21 @@ exclude_patterns = [
 # new and re-reports its existing findings as added. Gating a pure rename on
 # pre-existing complexity is noise.
 #
-# Advisory rather than deleted: `set.mode = "comment"` keeps the counts visible
-# on every PR. Per AGENTS.md, an external analyzer is advisory until a finding is
-# reproduced -- and these are reproduced, so they are real maintainability signal
-# on a surface that keeps explicit branching on purpose. The worst offenders, if
-# anyone wants to take them on deliberately rather than under a rename:
+# These are SUPPRESSED, not surfaced. `enabled = false` plus `set.ignored = true`
+# means the findings are neither computed nor reported, so nothing appears on a PR
+# and nothing blocks one. An earlier version of this comment claimed the counts
+# stayed visible via `set.mode = "comment"`; that was wrong -- `ignored` hides a
+# finding regardless of mode, so the mode setting had nothing to act on and has
+# been dropped rather than left in place implying it did something.
+#
+# To see them, run `qlty smells --all --json` locally: 30 findings across the six
+# families below (the 21 that Cloud reported as blocking, plus 9 from the three
+# families that were already disabled before this PR).
+#
+# Per AGENTS.md an external analyzer is advisory until reproduced -- these are
+# reproduced, so they are real maintainability signal on a surface that keeps
+# explicit branching on purpose. The worst offenders, for anyone who wants to take
+# them on deliberately rather than under a rename:
 #   reject_external_write_targets (46), gh_repo_clone_destination (33),
 #   push_destination_names (28), new (25), checkout_or_switch_target (25)
 [smells.function_parameters]
@@ -104,4 +115,3 @@ match.rules = [
   "qlty:nested-control-flow",
 ]
 set.ignored = true
-set.mode = "comment"

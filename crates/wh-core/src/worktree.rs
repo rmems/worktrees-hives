@@ -105,7 +105,7 @@ impl WorktreeManager {
     /// directive was silently ignored -- `cs delta` reports "you cannot override
     /// the following rules" and the analysis API counts
     /// `total_number_of_code_health_directives: 0`. It has been removed rather
-    /// than left in place implying the finding was handled.
+    /// than left in place, which would imply the finding was handled.
     pub fn create(
         &self,
         repo_root: &Path,
