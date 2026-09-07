@@ -1,0 +1,20 @@
+.github/dependabot.yml
+  s_43736fda7c8434::t_7a197a8d5bb176 1-40,43-59,62-64
+  s_43736fda7c8434::t_7b1be815e8c983 41-42,60-61
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "b5f3371f6bcbb835d3bde2c6f25ae1e18fbb1c25",
+  "prompts": {},
+  "sessions": {
+    "s_43736fda7c8434": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b9b899fb-1bf0-4b3f-a2fc-a6363915e78f",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Raul Montoya Cardenas <montoyaraul34@gmail.com>"
+    }
+  }
+}
