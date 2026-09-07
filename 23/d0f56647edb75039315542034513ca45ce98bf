@@ -1,0 +1,21 @@
+docs/examples/error-start-point-required.json
+  s_a3ad7a38fa224d::t_f2e735c4ff8c3e 3-4,7-8,10
+docs/examples/README.md
+  s_a3ad7a38fa224d::t_5cd964bcc0e648 1-42
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "23d0f56647edb75039315542034513ca45ce98bf",
+  "prompts": {},
+  "sessions": {
+    "s_a3ad7a38fa224d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db0515b1-1602-4f58-98b6-e4cdec47107c",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Raul Montoya Cardenas <montoyaraul34@gmail.com>"
+    }
+  }
+}
