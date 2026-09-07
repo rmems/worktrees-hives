@@ -27,10 +27,10 @@ body:
   attributes:
     label: Expected behavior / agent policy violation (if applicable)? 
     description: |  
-      Did the Rust safety gate reject a bad commit? Why did it let that through instead? Was Python's subprocess bridge missing `--json` flag when required for v1 JSON envelopes?  
+      Did the Rust safety gate reject a bad commit, or let one through? If the command emits a JSON envelope, say whether `--json` was passed and whether `schema_version` matched what the caller expected.
 
 - type: textarea
-  id: environment-details-rust-python-version-github-action-traces-used-mimocode-or-local-subagent
+  id: environment-details
   attributes:
-    label: Environment + traces (optional but helpful) — Rust version, Python package versions, GitHub Actions workflow names or local sub-agent spawn logs (like `mimo`)  
+    label: Environment + traces (optional but helpful) — Rust toolchain version, OS and architecture, GitHub Actions workflow names, or local sub-agent spawn logs
     description: |
