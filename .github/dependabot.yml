@@ -32,7 +32,12 @@ updates:
       # news arrives on one day rather than two.
       time: "08:00"
       timezone: "Etc/UTC"
-    open-pull-requests-limit: 5
+    # 10, not the default 5, because majors are deliberately ungrouped below.
+    # Each major update takes a slot of its own, so a low limit can be filled
+    # entirely by majors awaiting review -- and the grouped minor/patch PR, the
+    # one carrying routine security fixes, is then never opened. The headroom
+    # keeps the fast lane open while the slow lane is backed up.
+    open-pull-requests-limit: 10
     commit-message:
       prefix: "ci"
     groups:
@@ -51,7 +56,12 @@ updates:
       day: "monday"
       time: "08:00"
       timezone: "Etc/UTC"
-    open-pull-requests-limit: 5
+    # 10, not the default 5, because majors are deliberately ungrouped below.
+    # Each major update takes a slot of its own, so a low limit can be filled
+    # entirely by majors awaiting review -- and the grouped minor/patch PR, the
+    # one carrying routine security fixes, is then never opened. The headroom
+    # keeps the fast lane open while the slow lane is backed up.
+    open-pull-requests-limit: 10
     commit-message:
       prefix: "deps"
     groups:
