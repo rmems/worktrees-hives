@@ -210,13 +210,13 @@ Use platform-aware XDG/user-data resolution in implementation. Never assume a Li
 Version 1 responses use this envelope shape:
 
 ```json
-{"ok":true,"schema_version":1,"command":"state.show","data":{},"error":null}
+{"ok":true,"schema_version":1,"command":"cli.bootstrap","data":{},"error":null}
 ```
 
 - Standard output is machine-readable JSON when `--json` is selected.
 - Diagnostics belong on standard error.
 - Additive fields are compatible within v1; removals or semantic renames require a schema-version change.
-- `run-with-timeout` is reserved for the later process-supervisor work and must not be improvised in the foundation CLI.
+- Supervised execution is `writ supervisor run --timeout <secs>`; it is implemented, not reserved. Do not improvise a second timeout path in the CLI.
 
 Response envelopes and error codes are illustrated by the fixtures in `docs/examples/`.
 

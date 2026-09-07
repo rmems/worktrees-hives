@@ -1,0 +1,7 @@
+{
+  "ok": true,
+  "schema_version": 1,
+  "command": "cli.bootstrap",
+  "data": {},
+  "error": null
+}

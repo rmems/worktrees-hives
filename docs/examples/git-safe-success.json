@@ -1,0 +1,15 @@
+{
+  "ok": true,
+  "schema_version": 1,
+  "command": "git.safe",
+  "data": {
+    "args": [
+      "rev-parse",
+      "--is-inside-work-tree"
+    ],
+    "exit_code": 0,
+    "stderr": "",
+    "stdout": "true\n"
+  },
+  "error": null
+}
