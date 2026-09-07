@@ -1,0 +1,19 @@
+.github/workflows/release.yml
+  s_43736fda7c8434::t_e46900b0555919 90-95,115-124
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "16414c76a8044ea1c280df5214463df5f691c796",
+  "prompts": {},
+  "sessions": {
+    "s_43736fda7c8434": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b9b899fb-1bf0-4b3f-a2fc-a6363915e78f",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Raul Montoya Cardenas <montoyaraul34@gmail.com>"
+    }
+  }
+}
