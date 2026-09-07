@@ -87,6 +87,12 @@ jobs:
       # this workflow survives the `wh` -> `writ` crate rename (#145) without an
       # edit. Archives are uniformly .tar.gz, including Windows: tar ships with
       # Windows 10 and later, and one format keeps the checksum step trivial.
+      #
+      # `jq` needs no install step. It is preinstalled on all three GitHub
+      # runner images, Windows included, and this step is `shell: bash` so the
+      # same script runs everywhere. Verified rather than assumed: dispatching
+      # this workflow on the branch built x86_64-pc-windows-msvc successfully
+      # and produced a 679,896-byte artifact.
       - name: Package
         shell: bash
         env:
@@ -105,6 +111,17 @@ jobs:
           if [ "$RUNNER_OS" = "Windows" ]; then
             ext=".exe"
           fi
+
+          # `set -e` would already abort on a missing file, but with `cp: cannot
+          # stat ...` buried in the log rather than surfaced on the run. Name the
+          # two files a rename could plausibly break, so the failure explains
+          # itself.
+          for required in README.md LICENSE; do
+            if [ ! -f "$required" ]; then
+              echo "::error::${required} not found at the repository root; the release archive expects it"
+              exit 1
+            fi
+          done
 
           staging="${bin}-${TARGET}"
           mkdir -p "dist/${staging}"
