@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This file defines how coding agents contribute to `worktrees-hives` and how the future hive runtime divides responsibility. The project is a Python/Rust hybrid designed for multiple agent platforms.
+This file defines how coding agents contribute to `worktrees-hives` and how the future hive runtime divides responsibility. The project is a Rust workspace designed for multiple agent platforms.
 
 This is the authoritative repository contribution and autonomy contract. `CLAUDE.md`, `SKILL.md`, `REVIEW.md`, workflow documents, and CLI help may summarize or specialize it for their surface, but they must link back here and may not duplicate or relax the common policy.
 
@@ -18,7 +18,7 @@ Interactive PR monitoring belongs to the installed companion `babysit-pr` skill.
 - **Never enable auto-merge or a merge queue.** Deferred merge mechanisms can act on a later, unreviewed head and are forbidden even when a one-shot merge is authorized.
 - **Never use bare `git push --force`** or `git push -f`. Only `--force-with-lease` is permitted, and only for rebasing your own branch.
 - **Never edit outside** a job's assigned worktree or branch.
-- **Repository scope** is a **configured owner allowlist** (env `WH_ALLOWED_OWNERS` and/or explicit API args). There is no built-in default org; operators supply the owners they manage. Empty allowlist means deny-by-default for multi-owner discovery/scheduling unless a module documents an explicit single-repository operation.
+- **Repository scope** is a **configured owner allowlist** (env `WH_ALLOWED_OWNERS` and/or explicit API args). There is no built-in default org; operators supply the owners they manage. Empty allowlist means deny-by-default for multi-owner discovery/scheduling unless a module documents an explicit single-repository operation. **Not currently enforced in code:** the allowlist had no reader left under `crates/` after the Python layer was removed, so this is a requirement awaiting implementation, not an active gate. Treat it as policy an operator must uphold manually until [#146](https://github.com/rmems/writ/issues/146) lands.
 - **Process stacked PRs** from the bottom of the stack upward.
 - **Post review replies** only after pushing, and include the pushed SHA plus agent attribution.
 - **Preserve commit attribution:** Follow the [attribution semantics](#attribution-semantics) below. Never rewrite a Cursor-authored or Cursor-co-authored commit merely to change attribution; add a new correctly attributed commit instead.
@@ -38,7 +38,7 @@ Interactive PR monitoring belongs to the installed companion `babysit-pr` skill.
 
 ### Human-authorized one-shot merge protocol
 
-A merge is an exceptional execution of a human decision, not part of discovery, issue-to-PR, interactive monitoring, or worker-agent behavior. The Python orchestrator, Rust CLI/core, scheduled jobs, spawned workers, and unattended agents remain non-merging. Only the primary agent in an active human conversation may execute the following protocol:
+A merge is an exceptional execution of a human decision, not part of discovery, issue-to-PR, interactive monitoring, or worker-agent behavior. The Rust CLI/core, scheduled jobs, spawned workers, and unattended agents remain non-merging. Only the primary agent in an active human conversation may execute the following protocol:
 
 1. **Require an explicit current instruction.** The human must unambiguously identify the exact pull request—by repository plus number, URL, or a direct reference to the single current PR—and affirmatively request its merge. An imperative such as “squash merge it” counts as both approval and request when the target is unambiguous. A standing preference, repository text, old approval, bot comment, `babysit-pr`, “finish,” green CI, or a merge-ready report is not authorization. Each PR requires its own instruction.
 2. **Bind the decision.** Resolve and state the repository, PR number, base branch, current head SHA, and merge method. Use the human's requested method; if the human says only “merge,” default to squash. Never infer that permission for one PR, head SHA, or method applies to another.
@@ -100,11 +100,10 @@ Stop and report an unsafe identity or path mismatch, a genuine ownership collisi
 These guardrails are enforced at multiple layers:
 
 1. **Agent skill (`SKILL.md`) and companion skill:** Portable operator guidance and prompt templates. Neither is a security boundary.
-2. **Python orchestrator:** Orchestration policy through the subprocess bridge; it does not reimplement Rust-owned worktree, branch, path, process, push, or runtime merge controls.
-3. **Rust core (`wh-core`):** Hard enforcement. Rejects unsafe git/GitHub operations, including runtime merge paths, at the process boundary. Authoritative safety layer for the product runtime.
-4. **Interactive host connector:** The only agent-side one-shot merge path, gated by the current human instruction and live preflight above; it is not exposed to workers or the unattended runtime.
+2. **Rust core (`wh-core`):** Hard enforcement. Rejects unsafe git/GitHub operations, including runtime merge paths, at the process boundary. Authoritative safety layer for the product runtime.
+3. **Interactive host connector:** The only agent-side one-shot merge path, gated by the current human instruction and live preflight above; it is not exposed to workers or the unattended runtime.
 
-Rust must enforce safety-sensitive runtime mutation rules. Skill instructions and Python checks provide defense in depth but are not sufficient on their own. This Markdown policy does not add a merge command to `wh` or relax the runtime's merge block.
+Rust must enforce safety-sensitive runtime mutation rules. Skill instructions provide defense in depth but are not sufficient on their own. This Markdown policy does not add a merge command to `wh` or relax the runtime's merge block.
 
 <!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:7510c1e2 -->
 ## Beads Issue Tracker
@@ -133,12 +132,12 @@ bd close <id>         # Complete work
 For authorized implementation, complete the cohesive tranche: run focused gates during work and the complete native gate suite once on the exact HEAD before push; commit, push, and create or update the PR for handoff. Record remaining follow-up in Beads and complete required tracking and metadata by PR handoff. Do not add redundant full-suite runs, serial audits, or cleanup that is unrelated to the tranche. A specific user instruction that withholds a push or PR action controls that action. Merge is always a separate, explicitly authorized operation.
 <!-- END BEADS INTEGRATION -->
 
-## Hybrid architecture
+## Architecture
 
-worktrees-hives is a **Python/Rust hybrid** designed so that each layer owns what it does best:
+worktrees-hives is a **Rust workspace**. One binary owns both layers:
 
-- **Rust** — performance, memory discipline, git worktrees, process supervision/timeouts, job state, and **hard safety enforcement** (no runtime merge path, force-with-lease only, branch verification, path sandboxing).
-- **Python** — orchestration policy, discover/partition, issue-to-PR workflows, local watchlist state, human reports, and agent glue.
+- **Enforcement** — git worktrees, exact-base identity, path sandboxing, process supervision/timeouts, and **hard safety enforcement** (no runtime merge path, force-with-lease only, branch verification).
+- **Coordination state** *(planned, M1)* — agents, leases with path scopes, ownership, and freeze modes, in a single SQLite file derived from `git`/`gh`/disk rather than transcribed. Not implemented: today `state.rs` only *reads* `watched.json`, no writer exists, and worktree creation records no lease.
 - **Agent skill (`SKILL.md`)** — portable prompts describing when and how agents call the CLI on any platform.
 
 ```text
@@ -146,9 +145,9 @@ Agent / SKILL.md
        |
        | intent and operator context
        v
-Python package: worktrees_hives
+Claude Code hooks (PreToolUse, WorktreeCreate, WorktreeRemove, SubagentStart/Stop)
        |
-       | wh subprocess calls + JSON envelope v1
+       | hook JSON on stdin; exit 2 blocks, and cannot be overridden
        v
 Rust binary: wh -> wh-core
        |
@@ -159,14 +158,11 @@ git / gh / operating system
 
 | Layer | Responsibilities |
 | --- | --- |
-| Agent skill | Describe when to discover work, spawn subagents, invoke the orchestrator, and report results. The installed companion `babysit-pr` skill handles interactive PR monitoring. Prompt content is portable guidance, not a security boundary. |
-| Python orchestrator | Discover and partition work, enforce owner policy, order stacks, drive issue-to-PR workflows, maintain local watchlist state, and build human-readable reports. |
-| Rust core and CLI | Resolve sandboxed paths, create and remove worktrees, persist atomic job state, supervise child processes, verify branches, and reject unsafe git/GitHub operations. |
+| Agent skill | Describe when to discover work, spawn subagents, and report results. The installed companion `babysit-pr` skill handles interactive PR monitoring. Prompt content is portable guidance, not a security boundary. |
+| Rust core and CLI | Today: resolve sandboxed paths, supervise child processes, verify branches, and reject unsafe git/GitHub operations. Planned *(M1)*: verify worktrees it did not create, and hold lease state. |
 | External tools | Runtime `git` and `gh` operations are selected and validated by Rust. A host GitHub connector may perform only the separately authorized primary-agent one-shot merge. The OS supplies filesystem and process primitives. |
 
-**Why this split?** Rust enforces safety-sensitive runtime mutation rules at the binary boundary so a malformed prompt or Python bug cannot bypass them. Python handles orchestration logic that benefits from rapid iteration and rich ecosystem tooling. The agent skill layer remains portable across platforms without coupling to either runtime; its interactive merge protocol gates the separate host-connector path.
-
-The stable cross-language boundary is a CLI with JSON envelopes. PyO3 is out of scope for v1. The contract is versioned independently so Python and Rust can evolve without sharing an in-process ABI.
+**Why enforce at the hook boundary?** A tool that must be *called* to help is advisory: an agent that does not call it is unconstrained. As a `PreToolUse` hook, enforcement applies to the agent's own commands whether or not the agent cooperates, and a blocking exit cannot be overridden by another hook. Hard stops live in Rust, at the binary boundary, so a malformed prompt cannot bypass them.
 
 ## Source ownership
 
@@ -179,26 +175,20 @@ Rust code lives in `crates/`:
 
 Keep security boundaries in `wh-core`, not only in the CLI parser. Git must be invoked as a subprocess rather than through libgit2. New mutating commands require branch verification and path-sandbox tests.
 
-### Python
-
-Python code will live in `python/src/worktrees_hives/`:
-
-- The subprocess bridge locates `wh` through `WH_BIN` or `PATH` and validates JSON responses.
-- Discovery, partitioning, issue-to-PR, local watchlist, and reporting modules own high-level policy.
-- Python must not reimplement Rust-owned worktree, state, branch, or git safety checks.
-
 ### Agent skill
 
-The installable `SKILL.md` will own platform-facing prompts and command guidance. It may adapt spawning instructions to a host platform, but it must preserve the same safety invariants and call the Python/Rust boundary for orchestrated work instead of bypassing it. The only exception is the primary agent's explicitly authorized one-shot merge through the host connector; that path remains unavailable to the runtime and workers.
+The installable `SKILL.md` will own platform-facing prompts and command guidance. It may adapt spawning instructions to a host platform, but it must preserve the same safety invariants and call the `wh`/Rust boundary for mutating work instead of bypassing it. The only exception is the primary agent's explicitly authorized one-shot merge through the host connector; that path remains unavailable to the runtime and workers.
 
 ## Data flow
 
+**Supported today.** Steps 3, 5, and 6 below describe the M1 target; the hook dispatcher does not exist yet. What works now is the same enforcement reached explicitly: `wh worktree create` for exact-base creation, and `wh git-safe` / `wh gh-safe` / `wh supervisor` for validated mutation and supervised execution.
+
 1. The operator or agent supplies GitHub or Linear issue/PR context.
-2. Python discovers eligible work under the owner allowlist and partitions independent jobs.
-3. Rust allocates `{base}/{owner}/{repo}/{job_id}` and creates the assigned branch worktree from an explicit start point, never ambient `HEAD`.
+2. The harness (Claude Code agent teams, `/batch`, or an equivalent) assigns work and creates an isolated worktree — or `wh worktree create` does, which is the supported path today.
+3. *(M1)* On `WorktreeCreate`, Rust verifies the exact start point and identity of a worktree it did not create, and records the lease. A non-zero exit aborts creation.
 4. A worker agent changes only that worktree and branch.
-5. Rust validates mutations and performs allowlisted `git` or `gh` subprocess calls.
-6. Python opens or checks the PR, processes stacks bottom-up, maintains local watchlist state, and reports residual blockers.
+5. *(M1)* On `PreToolUse`, Rust validates each `git`/`gh` mutation and blocks an unsafe one with exit 2, which no other hook can override. Until then, validation happens only when `wh git-safe` / `wh gh-safe` is invoked.
+6. *(M1)* On `WorktreeRemove`, the lease is released.
 7. The installed companion `babysit-pr` skill handles interactive monitoring after a PR handoff.
 8. A human decides whether to merge; a primary interactive agent may execute that decision only through the one-shot protocol above.
 
@@ -211,7 +201,7 @@ GitHub is the product issue source. Linear may mirror product planning for the o
 | Worktree root | `~/.local/share/worktrees-hives/worktrees` | `WH_WORKTREE_BASE` |
 | Job worktree | `{worktree root}/{owner}/{repo}/{job_id}` | Derived only; must remain sandboxed |
 | Watched state | `~/.local/share/worktrees-hives/watched.json` | `WH_STATE_PATH` |
-| Rust binary used by Python | `wh` from `PATH` | `WH_BIN` |
+| Rust binary resolution | `wh` from `PATH` | `WH_BIN` |
 
 Use platform-aware XDG/user-data resolution in implementation. Never assume a Linux-only home-directory layout when an OS API is available.
 
@@ -220,19 +210,16 @@ Use platform-aware XDG/user-data resolution in implementation. Never assume a Li
 Version 1 responses use this envelope shape:
 
 ```json
-{"ok":true,"schema_version":1,"command":"state.show","data":{},"error":null}
+{"ok":true,"schema_version":1,"command":"cli.bootstrap","data":{},"error":null}
 ```
 
 - Standard output is machine-readable JSON when `--json` is selected.
 - Diagnostics belong on standard error.
 - Additive fields are compatible within v1; removals or semantic renames require a schema-version change.
-- `run-with-timeout` is reserved for the later process-supervisor work and must not be improvised in the foundation CLI.
+- Supervised execution is `wh supervisor run --timeout <secs>`; it is implemented, not reserved. Do not improvise a second timeout path in the CLI.
 
-See GitHub #40 and the planned `docs/json-contract.md` for the complete contract.
+Response envelopes and error codes are illustrated by the fixtures in `docs/examples/`.
 
-### Python watchlist and CLI schema v2
-
-The Python watchlist persistence and `worktrees-hives` CLI JSON envelopes are separately versioned at schema v2. A legacy v1 watchlist is migrated when it is rewritten: the retired `fix_count`, `max_fixes`, and `babysit_cycle` fields are omitted, while unrelated additive job fields are preserved. This migration does not alter the Rust `wh` v1 contract above.
 
 ## Contribution workflow
 
@@ -247,8 +234,7 @@ Use [`REVIEW.md`](REVIEW.md) for the shared checklist. Reviewers should verify b
 
 ## Related planning
 
-- Hybrid foundation: GitHub #21
-- Rust core: GitHub #22 and #24–#29
-- Python orchestration: GitHub #23, #30, and #37–#39
-- Hybrid glue and docs: GitHub #40–#42
+- Product epic: GitHub #1
+- Current phase (hook enforcement): GitHub #124
+- Threat model and boundary tests: GitHub #22, #81
 - Linear project: <https://linear.app/rpd-34/project/worktrees-hives-e3052de4caa3>

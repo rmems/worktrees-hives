@@ -1,6 +1,18 @@
 # Status JSON Schema
 
-This document defines the JSON schema emitted by `wh status --json` and `wh jobs --json`. These commands allow Python orchestrators and agent platforms to query the state of watched worktree-hives jobs.
+> [!WARNING]
+> **Both commands return an empty `jobs` array unless something outside this workspace supplies the state file.** `crates/wh-core/src/state.rs` has a read path and no writer, so nothing here creates `watched.json`, and with the file absent -- the normal case -- the output is empty. Verified:
+>
+> ```console
+> $ wh --json status
+> {"ok":true,"schema_version":1,"command":"cli.status","data":{"jobs":[]},"error":null}
+> ```
+>
+> The populated shapes below are still reachable, so consumers must handle them: `load_jobs_from` returns an empty vec only when the file is missing, and parses and returns any file that *is* present -- placed there externally, or pointed at via `WH_STATE_PATH`. What is missing is the writer, not the read path.
+>
+> The store is superseded rather than unfinished: the SQLite lease store in [#124](https://github.com/rmems/writ/issues/124) replaces it, with crash consistency in [#136](https://github.com/rmems/writ/issues/136).
+
+This document defines the JSON schema emitted by `wh status --json` and `wh jobs --json`.
 
 ## Envelope
 

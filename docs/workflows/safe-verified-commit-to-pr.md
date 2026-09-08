@@ -4,7 +4,7 @@ Portable worker contract for any coding agent. Runs **after** [Safe Issue → Ve
 
 Safety rules live in [`AGENTS.md`](../../AGENTS.md), [`SKILL.md`](../../SKILL.md), and [`REVIEW.md`](../../REVIEW.md). This file does not relax them.
 
-Contract: Issue → PR [#8](https://github.com/rmems/worktrees-hives/issues/8) / Linear [RM-123](https://linear.app/rpd-34/issue/RM-123/issue-pr-workflow-never-auto-merge). Isolation prerequisite [#6](https://github.com/rmems/worktrees-hives/issues/6). Interactive monitoring, when needed after handoff, belongs to the installed companion `babysit-pr` skill rather than this workflow.
+Contract: Issue → PR [#8](https://github.com/rmems/writ/issues/8) / Linear [RM-123](https://linear.app/rpd-34/issue/RM-123/issue-pr-workflow-never-auto-merge). Isolation prerequisite [#6](https://github.com/rmems/writ/issues/6). Interactive monitoring, when needed after handoff, belongs to the installed companion `babysit-pr` skill rather than this workflow.
 
 ## Inputs
 
@@ -21,7 +21,7 @@ One issue → one PR unless the issue explicitly groups work.
 
 - No verified push yet — run the commit workflow first.
 - Shared `main`/`master` checkout — work only in the job worktree/branch.
-- Owner outside the configured allowlist unless the operator named this job.
+- Owner outside the configured allowlist unless the operator named this job. **Not enforced in code today** (#146): the allowlist has no reader under `crates/` after the Python removal, so this stop is operator-upheld.
 - Any merge command, merge API, auto-merge, or merge-queue enablement.
 - Bare `git push --force` / `git push -f`.
 - Opening a no-op “kick CI” PR.

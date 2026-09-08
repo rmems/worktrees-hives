@@ -1,4 +1,6 @@
-blank: true
-contact_links:
-  - name: "Worktrees-hives Discord"
-    about: Need help or quick questions? Join our team discord.
+# `blank_issues_enabled` is the supported key name; `blank: true` was not read by
+# GitHub. The previous `contact_links` entry declared `name` and `about` with no
+# `url`, which is a required field -- an invalid entry risks GitHub discarding the
+# whole file, taking the blank-issue setting with it. Removed rather than pointed
+# at an invented URL.
+blank_issues_enabled: true

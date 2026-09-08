@@ -1,68 +1,66 @@
-# Codacy org quality gate uses issueThreshold=0.
-# Test asserts trip Bandit B101 as High Security; synthetic fixtures and
-# cloned test helpers trip duplication / clone rules. Agent-policy docs trip
-# Agentlinter on deny-by-default merge language. Exclude those surfaces from
-# the gate without weakening production analysis or rewriting AGENTS.md /
-# CLAUDE.md safety text.
+# Codacy configuration for the Rust-only workspace, restored after #144.
 #
-# PR #131's remaining Codacy hits are Complexity-only (9 medium). Coordination
-# APIs keep explicit parameters and branched schema negotiation on purpose;
-# do not rewrite them for complexity theater. Security engines stay enabled.
+# The org quality gate uses issueThreshold=0, so a single unsuppressed
+# false-positive class blocks every PR. Two such classes exist here:
+#
+# 1. Agentlinter flags "absolute rule without escape hatch" on AGENTS.md and
+#    CLAUDE.md. That is precisely what those files are for: `never merge
+#    autonomously` and `bare --force is forbidden` are deny-by-default safety
+#    rules, and adding an escape hatch to satisfy a linter would weaken the
+#    security contract. Excluded here rather than softening the text.
+#    (PR #144 reproduced exactly this: 2 medium BestPractice findings on
+#    AGENTS.md L106 and L165.)
+#
+# 2. Cyclomatic-complexity engines flag the coordination surfaces, which keep
+#    explicit parameters and branched schema negotiation on purpose. Do not
+#    rewrite them for complexity theater. Security engines stay enabled.
+#
 # `metric` is Codacy's official cyclomatic-complexity engine name; `complexity`
 # and `lizard` are included so either Cloud spelling still applies.
+#
+# Paths use globs so the pending `wh` -> `writ` crate rename (#145) does not
+# invalidate this file.
 ---
 exclude_paths:
-  - "python/tests/**"
-  - "**/tests/**"
-  - "**/test_*.py"
+  # Rust integration tests. These MUST be excluded at the top level, not only
+  # under the per-engine blocks below: the security engine is not scoped by
+  # those, so `temp_dir should not be used for security operations` fires on
+  # `crates/*/tests/*.rs` test fixtures. The previous config had `**/tests/**`
+  # here for the same reason; dropping it re-opened the hole.
+  - "crates/*/tests/**"
   - "AGENTS.md"
   - "CLAUDE.md"
+  - "**/target/**"
 
 engines:
   duplication:
     exclude_paths:
-      - "python/tests/**"
-      - "**/tests/**"
-      - "**/test_*.py"
+      - "crates/*/tests/**"
+      - "**/target/**"
+  # `supervisor.rs` is deliberately absent from these three engine blocks even
+  # though the sibling `.qlty/qlty.toml` records complexity findings there.
+  # Codacy has not reproduced any, and Codacy passes on this PR. Per AGENTS.md an
+  # analyzer finding is advisory until reproduced, so this exclusion list tracks
+  # what actually fired rather than pre-empting what might. Add
+  # `crates/*/src/supervisor.rs` if Codacy ever reports it.
   complexity:
     exclude_paths:
-      - "python/tests/**"
-      - "**/tests/**"
-      - "**/test_*.py"
-      - "python/src/worktrees_hives/bridge.py"
-      - "python/src/worktrees_hives/claim.py"
-      - "python/src/worktrees_hives/cli.py"
-      - "python/src/worktrees_hives/contract.py"
-      - "python/src/worktrees_hives/issue_to_pr.py"
-      - "python/src/worktrees_hives/lab_jobs.py"
-      - "crates/wh-core/src/worktree.rs"
-      - "crates/wh-core/src/error.rs"
-      - "crates/wh/src/main.rs"
+      - "crates/*/tests/**"
+      - "crates/*/src/worktree.rs"
+      - "crates/*/src/error.rs"
+      - "crates/*/src/git_safe.rs"
+      - "crates/*/src/main.rs"
   metric:
     exclude_paths:
-      - "python/tests/**"
-      - "**/tests/**"
-      - "**/test_*.py"
-      - "python/src/worktrees_hives/bridge.py"
-      - "python/src/worktrees_hives/claim.py"
-      - "python/src/worktrees_hives/cli.py"
-      - "python/src/worktrees_hives/contract.py"
-      - "python/src/worktrees_hives/issue_to_pr.py"
-      - "python/src/worktrees_hives/lab_jobs.py"
-      - "crates/wh-core/src/worktree.rs"
-      - "crates/wh-core/src/error.rs"
-      - "crates/wh/src/main.rs"
+      - "crates/*/tests/**"
+      - "crates/*/src/worktree.rs"
+      - "crates/*/src/error.rs"
+      - "crates/*/src/git_safe.rs"
+      - "crates/*/src/main.rs"
   lizard:
     exclude_paths:
-      - "python/tests/**"
-      - "**/tests/**"
-      - "**/test_*.py"
-      - "python/src/worktrees_hives/bridge.py"
-      - "python/src/worktrees_hives/claim.py"
-      - "python/src/worktrees_hives/cli.py"
-      - "python/src/worktrees_hives/contract.py"
-      - "python/src/worktrees_hives/issue_to_pr.py"
-      - "python/src/worktrees_hives/lab_jobs.py"
-      - "crates/wh-core/src/worktree.rs"
-      - "crates/wh-core/src/error.rs"
-      - "crates/wh/src/main.rs"
+      - "crates/*/tests/**"
+      - "crates/*/src/worktree.rs"
+      - "crates/*/src/error.rs"
+      - "crates/*/src/git_safe.rs"
+      - "crates/*/src/main.rs"

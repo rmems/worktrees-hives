@@ -98,7 +98,14 @@ impl WorktreeManager {
     ///
     /// This six-argument shape is a frozen compatibility wrapper. New callers
     /// should use [`Self::create_with_request`] so identity fields stay packed.
-    // @codescene(disable:"String Heavy Function Arguments") Compatibility wrapper; do not unpack.
+    ///
+    /// CodeScene flags this as "String Heavy Function Arguments" and that finding
+    /// is accepted, not suppressed. A `@codescene(disable:...)` directive used to
+    /// sit here; CodeScene does not permit overriding this particular rule, so the
+    /// directive was silently ignored -- `cs delta` reports "you cannot override
+    /// the following rules" and the analysis API counts
+    /// `total_number_of_code_health_directives: 0`. It has been removed rather
+    /// than left in place, which would imply the finding was handled.
     pub fn create(
         &self,
         repo_root: &Path,
