@@ -1,20 +1,48 @@
+# Codecov configuration for the Rust workspace.
+#
+# The previous version of this file set `target: 0` with `threshold: 0.0` on
+# both the project and patch statuses. A target of zero means "require 0%
+# coverage", which every possible report satisfies -- coverage could fall from
+# 86% to 0% and both checks would still report green. The statuses existed but
+# measured nothing. The targets below are the fix.
+#
+# Baselines these numbers come from (main @ 00d6989):
+#   - project coverage: 86%
+#   - PR #144 patch coverage: 100% ("All modified and coverable lines are
+#     covered by tests")
+# So neither threshold asks for more than this workspace already delivers.
+
 codecov:
+  # Deliberately false. Codecov does not distinguish the native Rust gates from
+  # the several third-party review bots that also report checks here, so `true`
+  # lets an unrelated bot hold the coverage status pending indefinitely. A
+  # genuinely broken build is already caught by `test (ubuntu-latest)` in
+  # rust.yml going red, which blocks the PR regardless of what Codecov says.
   require_ci_to_pass: false
 
 coverage:
+  # Colour range for the UI only; has no gating effect.
+  range: "80...95"
+
   status:
     project:
       default:
-        target: 0
-        threshold: 0.0
+        # Track the base commit rather than a fixed number, so the gate keeps
+        # working as coverage rises. 1% absorbs ordinary line-count noise
+        # without absorbing a real regression.
+        target: auto
+        threshold: 1%
         base: auto
     patch:
       default:
-        target: 0
-        threshold: 0.0
+        # A fixed floor rather than `auto`: it tells a contributor exactly what
+        # new code must clear, and does not tighten unpredictably as project
+        # coverage drifts. 80% sits below both the 86% project level and the
+        # 100% patch coverage recent PRs achieve.
+        target: 80%
+        threshold: 0%
         base: auto
 
 ignore:
   - "**/target/**"
-  - "**/.venv/**"
   - "**/tests/**"
