@@ -1,0 +1,19 @@
+crates/writ-core/src/supervisor.rs
+  s_a141e1ed2ca6fb::t_d97d2a12e93669 676
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "51556e7708de1e73ed5aaa1da51b604dee037122",
+  "prompts": {},
+  "sessions": {
+    "s_a141e1ed2ca6fb": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2b68b7b1-868b-4646-8a16-650e66f53bba",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Raul Montoya Cardenas <montoyaraul34@gmail.com>"
+    }
+  }
+}
